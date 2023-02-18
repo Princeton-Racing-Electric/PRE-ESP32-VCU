@@ -1,0 +1,11 @@
+{
+  "C_Cpp.intelliSenseEngine": "Tag Parser",
+  "files.associations": {
+    "*.ipp": "c",
+    "*.inc": "c",
+    "regex": "c",
+    "string_view": "c",
+    "array": "c",
+    "string": "c"
+  }
+}

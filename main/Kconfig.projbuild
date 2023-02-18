@@ -1,0 +1,201 @@
+menu "VCU Configuration"
+    menu "GPIO"
+        config GPIO_MOSI
+            int "GPIO MOSI"
+            range 0 48
+            default 23
+            help MOSI Pin
+
+        config GPIO_MISO
+            int "GPIO MISO"
+            range 0 48
+            default 19
+            help MISO Pin
+
+        config GPIO_SCLK
+            int "GPIO SCLK"
+            range 0 48
+            default 18
+            help SCLK Pin
+
+        config GPIO_CS_ADC
+            int "GPIO ADC CS"
+            range 0 48
+            default 18
+            help Chip Select Pin for ADC
+
+        config GPIO_CS_ACCEL
+            int "GPIO Accelerometer CS"
+            range 0 48
+            default 20
+            help Chip Select Pin for Accelerometer
+
+        config GPIO_CS_GYRO
+            int "GPIO Gyroscope CS"
+            range 0 48
+            default 21
+            help Chip Select Pin for Gyroscope
+
+        config ACCEL_INT_GPIO
+            int "Accelerometer Interupt Number"
+            range 0 48
+            default 26
+            help Which pin of the ESP32 is connected to the Accelerometer interupt pin
+
+        config GYRO_INT_GPIO
+            int "Gyroscope Interupt GPIO
+            range 0 48
+            default 25
+            help Which pin of the ESP32 is connected to the gyrscope interupt pin
+    endmenu
+
+    menu "Gyroscope"
+        config GYRO_FULL_SCALE
+            int "Gyroscope Full Scale"
+            range 0 4
+            default 2
+            help 0 => 2000, 1 => 1000, 2 => 500, 3 => 250, 4 => 125 (deg/s)
+
+        config GYRO_ODR
+            int "Gyroscope Output Data Rate"
+            range 0 7
+            default 2
+            help 0 => 2000, 1 => 2000, 2 => 1000, 3 => 400, 4 => 200, 5 => 100, 6 => 200, 7 => 100
+
+        config GYRO_INT
+            int "Gyroscope Interupt Number"
+            range 3 4
+            default 3
+            help Which internal interupt of the BMI to use
+
+        config GYRO_INT_TYPE
+            int "Gyroscope Interupt Type"
+            range 0 1
+            default 1
+            help 0 => push-pull 1 => open-drain
+    endmenu
+
+    menu "Accelerometer"
+        config ACCEL_INT
+            int "Accelerometer Interupt Number"
+            range 1 2
+            default 1
+            help Which internal interupt of the BMI to use
+
+        config ACCEL_FULL_SCALE
+            int "Accelerometer Full Scale"
+            range 0 3
+            default 1
+            help 0 => 3, 1 => 6, 2 => 12, 3 => 24 (g)
+
+        config ACCEL_OVERSAMPLING
+            int "Accelerometer Oversampling"
+            range 8 10
+            default 9
+            help 8 => 4x, 9 => 2x, 10 => 1x
+
+        config ACCEL_ODR
+            int "Accelerometer Output Data Rate"
+            range 5 12
+            default 11
+            help 5 => 12.5, 6 => 25, 7 => 50, 8 => 100, 9 => 200, 10 => 400, 11 => 800, 12 => 1600 (Hz)
+
+        config ACCEL_INT_TYPE
+            int "Accelerometer Interupt Type"
+            range 0 1
+            default 1
+            help 0 => push-pull 1 => open-drain
+    endmenu
+
+    menu "Priorities"
+        config SEND_TORQUE_PRIORITY
+            int "Send Torque Priority"
+            range 1 32
+            default 9
+
+        config READ_THROTTLE_PRIORITY
+            int "Read Throttle Priority"
+            range 1 32
+            default 8
+
+        config READ_ACCEL_PRIORITY
+            int "Read Accelerometer Priority"
+            range 1 32
+            default 7
+
+        config READ_SPEEDS_PRIORITY
+            int "Read Motor Speeds Priority"
+            range 1 32
+            default 6
+
+        config READ_MOTOR_TORQUE_PRIORITY
+            int "Read Motor Torque Priority"
+            range 1 32
+            default 5
+
+        config READ_GYRO_PRIORITY
+            int "Read Gyroscope Priority"
+            range 1 32
+            default 4
+
+        config READ_MOTOR_TEMP_PRIORITY
+            int "Read Motor Temperature Priority"
+            range 1 32
+            default 3
+
+        config READ_CONTROLLER_TEMP_PRIORITY
+            int "Read Motor Controller Temperature Priority"
+            range 1 32
+            default 2
+
+        config READ_SAS_PRIORITY
+            int "Read Steering Angle Sensor Priority"
+            range 1 32
+            default 1
+    endmenu
+
+    menu "Task Periods"
+        config SEND_TORQUE_PERIOD
+            int "Send Torque Period"
+            range 1 10000
+            default 20
+            help rate in milliseconds
+
+        config READ_THROTTLE_PERIOD
+            int "Read Throttle Period"
+            range 1 10000
+            default 20
+            help rate in milliseconds
+
+        config READ_SPEEDS_PERIOD
+            int "Read Motor Speeds Period"
+            range 1 10000
+            default 20
+            help rate in milliseconds
+
+        config READ_MOTOR_TORQUE_PERIOD
+            int "Read Motor Torque Period"
+            range 1 10000
+            default 20
+            help rate in milliseconds
+
+        config READ_MOTOR_TEMP_PERIOD
+            int "Read Motor Temperature Period"
+            range 1 10000
+            default 1000
+            help rate in milliseconds
+
+        config READ_CONTROLLER_TEMP_PERIOD
+            int "Read Motor Controller Temperature Period"
+            range 1 10000
+            default 1000
+            help rate in milliseconds
+
+        config READ_SAS_PERIOD
+            int "Read Steering Angle Sensor Period"
+            range 1 10000
+            default 100
+            help rate in milliseconds
+    endmenu
+
+endmenu
