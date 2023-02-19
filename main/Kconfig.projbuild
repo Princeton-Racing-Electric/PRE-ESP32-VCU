@@ -227,6 +227,12 @@ menu "VCU Configuration"
     endmenu
 
     menu "Priorities"
+        config PREVCU_RECEIVE_CAN_PRIORITY
+            int "Receive Can Interupt Priority"
+            range 1 32
+            default 10
+            help
+                Should be the highest
         config PREVCU_SEND_TORQUE_PRIORITY
             int "Send Torque Priority"
             range 1 32

@@ -261,8 +261,8 @@ void send_torque()
             0x60, // 0x6071 is the specifier
             0x00,
             torque, // 0-256
-            0x0,    // set to 1 for reverse (some motors may need this)
-            0x0,    // CANopen padding
+            0x0,
+            0x0, // CANopen padding
             0x0,
         };
 
@@ -278,10 +278,33 @@ void send_torque()
 // takes care of all of the receiving
 void can_receive()
 {
+    TickType_t current_time = xTaskGetTickCount();
+    TickType_t last_heartbeat_message[4] = {current_time, current_time, current_time, current_time};
     for (;;)
     {
+        TickType_t ticks_till_timeout;
+        current_time = xTaskGetTickCount();
+        // TODO: Replace subtraction with something overflow aware
+        max_time_diff = max(
+            max(
+                max(current_time - last_heartbeat_message[0],
+                    current_time - last_heartbeat_message[1]),
+                current_time - last_heartbeat_message[2]),
+            current_time - current_time - last_heartbeat_message[3]);
+        if (max_time_diff >= pdMS_TO_TICKS(500))
+        {
+            ticks_till_timeout = 0
+        }
+        else
+        {
+            ticks_till_timeout = pdMS_TO_TICKS(500) - max_time_diff;
+        }
         can_message_t message;
-        ESP_ERROR_CHECK(can_receive(&message, pdMS_TO_TICKS(portMAX_DELAY)));
+
+        if (can_receive(&message, ticks_till_timeout) != ESP_OK)
+        {
+            // report heartbeat timeout error and shutdown
+        }
         // process the message:
         // message.identifier
         // message.data_length_code
