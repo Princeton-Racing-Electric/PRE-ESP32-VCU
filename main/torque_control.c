@@ -13,6 +13,7 @@
 #include "esp_log.h"
 #include "sdkconfig.h"
 #include "driver/spi_master.h"
+#include "driver/can.h"
 
 static const char *TAG = "example";
 
@@ -109,6 +110,14 @@ our_handles_t setup()
     // TODO: wait some time
 
     // TODO: set odr and osr, and range
+
+    can_general_config_t g_config = CAN_GENERAL_CONFIG_DEFAULT(PREVCU_CANTX_GPIO, PREVCU_CANRX_GPIO, CAN_MODE_NORMAL);
+    can_timing_config_t t_config = CAN_TIMING_CONFIG_500KBITS();
+    can_filter_config_t f_config = CAN_FILTER_CONFIG_ACCEPT_ALL();
+
+    // Install CAN driver
+    ESP_ERROR_CHECK(can_driver_install(&g_config, &t_config, &f_config))
+    ESP_ERROR_CHECK(can_start());
 
     return handles;
 }
@@ -235,6 +244,48 @@ void read_adc_task()
         }
         // TODO: Add data to queue
         vTaskDelayUntil(&xLastWakeTime, 4 / portTICK_PERIOD_MS); // 250 Hz
+    }
+}
+
+void send_torque()
+{
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    for (;;)
+    {
+        can_message_t message;
+        message.identifier = 0x600 + mc_id;
+        message.data_length_code = 8;
+        message.data = {
+            0x2B, // magic numbers for CANopen
+            0x71,
+            0x60, // 0x6071 is the specifier
+            0x00,
+            torque, // 0-256
+            0x0,    // set to 1 for reverse (some motors may need this)
+            0x0,    // CANopen padding
+            0x0,
+        };
+
+        // Queue message for transmission
+        if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_SEND_TORQUE_PERIOD / 2)) != ESP_OK)
+        {
+            // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
+        }
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_SEND_TORQUE_PERIOD));
+    }
+}
+
+// takes care of all of the receiving
+void can_receive()
+{
+    for (;;)
+    {
+        can_message_t message;
+        ESP_ERROR_CHECK(can_receive(&message, pdMS_TO_TICKS(portMAX_DELAY)));
+        // process the message:
+        // message.identifier
+        // message.data_length_code
+        // message.data
     }
 }
 

@@ -55,6 +55,15 @@ menu "VCU Configuration"
             default 25
             help
                 Which pin of the ESP32 is connected to the gyrscope interupt pin
+
+        config PREVCU_CANTX_GPIO
+            int "CAN Tx GPIO"
+            range 0 48
+            default 21
+        config PREVCU_CANRX_GPIO
+            int "CAN Rx GPIO"
+            range 0 48
+            default 22
     endmenu
 
     menu "Gyroscope"
