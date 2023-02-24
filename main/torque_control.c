@@ -292,7 +292,8 @@ motor_temps_t read_adc_task()
         motor_temps_t motortemps;
         // TODO: add data to queue
         for (int i = 0; i < 4; ++i) {
-           midval = (1.f-0.001f*pullups*data[i])/(1.f-data[i]);
+           midval = 1.f*data[i]/2048.f;
+           midval = (1.f-0.001f*pullups*midval)/(1.f-midval);
            midval = A * A - 4 * B * midval * midval;
            midval = (-A-sqrtf(midval))/2.f/B;
            motortemps.temps[i] = midval;
