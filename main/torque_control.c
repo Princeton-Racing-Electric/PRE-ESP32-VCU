@@ -17,6 +17,8 @@
 
 static const char *TAG = "example";
 
+uint16_t mc_id[4];
+
 typedef struct our_handles_t
 {
     spi_handle_t adc;
@@ -244,6 +246,59 @@ void read_adc_task()
         }
         // TODO: Add data to queue
         vTaskDelayUntil(&xLastWakeTime, 4 / portTICK_PERIOD_MS); // 250 Hz
+    }
+}
+
+void read_data(unsigned int address, unsigned int sub_index){
+  uint8_t b1 = (address >> 8);
+  uint8_t b2 = (address >> 0);
+  can_message_t message;
+  for (i = 0; i < 4; i++) {
+    message.identifier = 0x600 + mc_id[i];
+    message.data_length_code = 8;
+    message.data = {
+        0x40,
+        // info address little endian
+        b2,
+        b1,
+        sub_index,
+        // zeroes for padding
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+    }   
+    // Queue message for transmission
+    if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_CAN_TIMEOUT)) != ESP_OK)
+    {
+        // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
+    }
+  }
+  
+  Serial.println("Packet Sent - Data Read Request");
+}
+
+void read_speeds() {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    for(;;) {
+        read_data(0x606C, 0x00);
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_SPEEDS_PERIOD));\
+    }
+}
+
+void read_mc_temps() {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    for(;;) {
+        read_data(0x2026, 0x00);
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_CONTROLLER_TEMP_PERIOD));\
+    }
+}
+
+void read_real_torque() {
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    for(;;) {
+        read_data(0x6077, 0x00);
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_MOTOR_TORQUE_PERIOD));\
     }
 }
 
