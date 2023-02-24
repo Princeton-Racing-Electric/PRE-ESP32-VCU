@@ -17,6 +17,12 @@
 
 static const char *TAG = "example";
 
+typedef struct queue_element_t
+{
+    uint16_t queue_header;
+    char[64] buffer;
+} queue_element_t;
+
 typedef struct our_handles_t
 {
     spi_handle_t adc;
@@ -119,10 +125,12 @@ our_handles_t setup()
     ESP_ERROR_CHECK(can_driver_install(&g_config, &t_config, &f_config))
     ESP_ERROR_CHECK(can_start());
 
+    QueueHandle_t xQueueCreate(10, sizeof(queue_element_t));
+
     return handles;
 }
 
-int16_t accel_reading_to_count(char *data)
+float accel_reading_conversion(char *data)
 {
     uint16_t ucounts = data[1];
     ucounts <<= 8;
@@ -130,6 +138,12 @@ int16_t accel_reading_to_count(char *data)
     int16_t counts = ucounts;
 }
 
+typedef struct accel_data_t
+{
+    float x;
+    float y;
+    float z;
+} accel_data_t;
 void read_accel()
 {
     spi_device_handle_t accel_handle;
@@ -146,10 +160,15 @@ void read_accel()
             .rx_buffer = data,
         };
         ESP_ERROR_CHECK(spi_device_transmit(accel_handle, &t));
-        int16_t x = accel_reading_to_count(data + 1);
-        int16_t y = accel_reading_to_count(data + 3);
-        int16_t z = accel_reading_to_count(data + 5);
-        // TODO add xyz to queue
+        acccel_data_t accel_data;
+        accel_data.x = accel_reading_conversion(data + 1);
+        accel_data.y = accel_reading_conversion(data + 3);
+        accel_data.z = accel_reading_conversion(data + 5);
+        queue_element_t queue_element;
+        queue_element.header = ACCEL_QUEUE_HEADER;
+        memcpy(&queue_element.buffer, &accel_data, sizeof(accel_data));
+
+        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
         // TODO Block on waiting for interupt line to go high (level trigger) again
     }
 }
