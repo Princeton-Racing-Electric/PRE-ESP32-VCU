@@ -17,7 +17,14 @@
 
 static const char *TAG = "example";
 
+
 uint16_t mc_id[4];
+
+typedef struct queue_element_t
+{
+    uint16_t queue_header;
+    char[64] buffer;
+} queue_element_t;
 
 typedef struct our_handles_t
 {
@@ -26,6 +33,11 @@ typedef struct our_handles_t
     spi_handle_t accelerometer;
     spi_handle_t gyroscope;
 } our_handles_t;
+
+typedef struct motor_temps_t
+{
+   float[4] temps;
+} motor_temps_t;
 
 our_handles_t setup()
 {
@@ -121,10 +133,12 @@ our_handles_t setup()
     ESP_ERROR_CHECK(can_driver_install(&g_config, &t_config, &f_config))
     ESP_ERROR_CHECK(can_start());
 
+    QueueHandle_t xQueueCreate(10, sizeof(queue_element_t));
+
     return handles;
 }
 
-int16_t accel_reading_to_count(char *data)
+float accel_reading_conversion(char *data)
 {
     uint16_t ucounts = data[1];
     ucounts <<= 8;
@@ -132,6 +146,12 @@ int16_t accel_reading_to_count(char *data)
     int16_t counts = ucounts;
 }
 
+typedef struct accel_data_t
+{
+    float x;
+    float y;
+    float z;
+} accel_data_t;
 void read_accel()
 {
     spi_device_handle_t accel_handle;
@@ -148,10 +168,15 @@ void read_accel()
             .rx_buffer = data,
         };
         ESP_ERROR_CHECK(spi_device_transmit(accel_handle, &t));
-        int16_t x = accel_reading_to_count(data + 1);
-        int16_t y = accel_reading_to_count(data + 3);
-        int16_t z = accel_reading_to_count(data + 5);
-        // TODO add xyz to queue
+        acccel_data_t accel_data;
+        accel_data.x = accel_reading_conversion(data + 1);
+        accel_data.y = accel_reading_conversion(data + 3);
+        accel_data.z = accel_reading_conversion(data + 5);
+        queue_element_t queue_element;
+        queue_element.header = ACCEL_QUEUE_HEADER;
+        memcpy(&queue_element.buffer, &accel_data, sizeof(accel_data));
+
+        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
         // TODO Block on waiting for interupt line to go high (level trigger) again
     }
 }
@@ -212,26 +237,68 @@ float read_sas(uart_port_t sas_handle)
     }
 }
 
-void read_adc_task()
+motor_temps_t read_adc_task()
 {
     spi_device_handle_t adc_handle;
-    TickType_t xLastWakeTime = xTaskGetTickCount();
+    spi_transaction_t transmissions[5];
+    TickType_t xLastWakeTime;
+    uint8_t k;
+    uint8_t addresses[4];
+    float pullups[4];
+    uint16_t temp;
+    float A = 0.0039083.f;
+    float B = -0.0000005775.f;
+    float midval;
+#ifdef MOTOR_TEMPERATURE_ADC_0
+    addresses[k] = 0;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_0
+#endif
+#ifdef MOTOR_TEMPERATURE_ADC_1
+    addresses[k++] = 1;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_1
+#endif
+#ifdef MOTOR_TEMPERATURE_ADC_2
+    addresses[k++] = 2;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_2
+#endif
+#ifdef MOTOR_TEMPERATURE_ADC_3
+    addresses[k++] = 3;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_3
+#endif
+#ifdef MOTOR_TEMPERATURE_ADC_4
+    addresses[k++] = 4;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_4
+#endif
+#ifdef MOTOR_TEMPERATURE_ADC_5
+    addresses[k++] = 5;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_5
+#endif
+#ifdef MOTOR_TEMPERATURE_ADC_6
+    addresses[k++] = 6;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_6
+#endif
+#ifdef MOTOR_TEMPERATURE_ADC_7
+    addresses[k++] = 7;
+    pullups[k++] = (float) MOTOR_TEMP_PULLUP_7
+#endif
+    for (int adc_num = 0; adc_num < 4; ++adc_num) {
+       transmissions[adc_num] = {
+          .length = 11,
+          .cmd = 0x1,
+          .addr = addresses[adc_num],
+          .flags = SPI_TRANS_USE_RXDATA,
+       };
+    }
+    xLastWakeTime = xTaskGetTickCount();
     for (;;)
     {
-        uint16_t data[5];
-        spi_transaction_t transmissions[5];
-        for (int adc_num = 0; adc_num < 5; ++adc_num)
-        {
-            transmissions[adc_num] = {
-                .length = 11,
-                .cmd = 0x1,
-                .addr = adc_num,
-                .flags = SPI_TRANS_USE_RXDATA,
-            };
+        uint16_t data[4];
             // queue them all at once so that we have to switch context less (hopefully)
+        }
+        for (int adc_num = 0; adc_num < 4; ++adc_num) {
             ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, transmissions + adc_num, portMAX_DELAY));
         }
-        for (int i = 0; i < 5; ++i)
+        for (int i = 0; i < 4; ++i)
         {
             spi_transaction_t *completed_transmission; // will point one of the positions in the array above
             ESP_ERROR_CHECK(spi_device_get_trans_result(adc_handle, &completed_transmission, portMAX_DELAY));
@@ -244,9 +311,18 @@ void read_adc_task()
             data[adc_num] <<= 8;
             data[adc_num] |= t.rx_data[1];
         }
-        // TODO: Add data to queue
+        motor_temps_t motortemps;
+        // TODO: add data to queue
+        for (int i = 0; i < 4; ++i) {
+           midval = 1.f*data[i]/2048.f;
+           midval = (1.f-0.001f*pullups*midval)/(1.f-midval);
+           midval = A * A - 4 * B * midval * midval;
+           midval = (-A-sqrtf(midval))/2.f/B;
+           motortemps.temps[i] = midval;
+        }
         vTaskDelayUntil(&xLastWakeTime, 4 / portTICK_PERIOD_MS); // 250 Hz
     }
+return motortemps;
 }
 
 void read_data(unsigned int address, unsigned int sub_index){
