@@ -138,90 +138,85 @@ menu "VCU Configuration"
             int "Max Slip Ratio * 1000"
             range 0 1000
             default 110
-        config PREVCU_MAX_THROTTLE_MV
-            int "100% Throttle mV"
+        config PREVCU_MAX_THROTTLE_PERCENT
+            int "100% Throttle in % of 5V"
             range 0 5000
-            default 1600
-        config PREVCU_MIN_THROTTLE_MV
-            int "0% Throttle mV"
-            range 0 5000
-            default 500
-        config PREVCU_ERR_MAX_THROTTLE_MV
-            int "Error High Throttle mV"
-            range 0 5000
-            default 4500
-        config PREVCU_ERR_MIN_THROTTLE_MV
-            int "Error Low Throttle mV"
-            range 0 5000
-            default 300
+            default 32s
+        config PREVCU_MIN_THROTTLE_PERCENT
+            int "0% Throttle in % of 5V"
+            range 0 100
+            default 10
+        config PREVCU_ERR_MAX_THROTTLE_PERCENT
+            int "Error High Throttle % of 5V"
+            range 0 100
+            default 90
+        config PREVCU_ERR_MIN_THROTTLE_PERCENT
+            int "Error Low Throttle % of 5V"
+            range 0 100
+            default 6
         config PREVCU_THROTTLE_ADC_NUM
             int "Throttle ADC Number"
             range 0 7
             default 4
     endmenu
 
+    menu "SAS"
+        config PREVCU_SAS_FORWARD
+            int "Straight Steering Wheel Count"
+            range 0 4095
+            default 0
+    endmenu
+
+    menu "Motor Controller Addresses"
+        config PREVCU_FL_ADDR
+            int "Front Left Node-ID"
+            range 1 255
+            default 0x01
+        config PREVCU_FR_ADDR
+            int "Front Right Node-ID"
+            range 1 255
+            default 0x02
+        config PREVCU_BL_ADDR
+            int "Back Left Node-ID"
+            range 1 255
+            default 0x03
+        config PREVCU_BL_ADDR
+            int "Back Right Node-ID"
+            range 1 255
+            default 0x04
+    endmenu
+
     menu "Motor Temperatures"
-        config MOTOR_TEMPERATURE_ADC_0
-            bool "Motor Temp ADC 0"
-            default y
-        config MOTOR_TEMP_PULLUP_0
-            int "Pullup Resistor ADC 0"
+        config PREVCU_FL_ADC_NUM
+            int "Front Right ADC Address"
+            range 0 7
+            default 0
+        config PREVCU_FL_PULLUP
+            int "Front Left Pullup Resistor"
             range 0 1000000
             default 1200
-
-        config MOTOR_TEMPERATURE_ADC_1
-            bool "Motor Temp ADC 1"
-            default y
-        config MOTOR_TEMP_PULLUP_1
-            int "Pullup Resistor ADC 1"
+        config PREVCU_FR_ADC_NUM
+            int "Front Right ADC Address"
+            range 0 7
+            default 1
+        config PREVCU_FR_PULLUP
+            int "Front Left Pullup Resistor"
             range 0 1000000
             default 1200
-
-        config MOTOR_TEMPERATURE_ADC_2
-            bool "Motor Temp ADC 2"
-            default y
-        config MOTOR_TEMP_PULLUP_2
-            int "Pullup Resistor ADC 2"
+        config PREVCU_BL_ADC_NUM
+            int "Front Right ADC Address"
+            range 0 7
+            default 2
+        config PREVCU_BL_PULLUP
+            int "Front Left Pullup Resistor"
             range 0 1000000
             default 1200
-
-        config MOTOR_TEMPERATURE_ADC_3
-            bool "Motor Temp ADC 3"
-            default y
-        config MOTOR_TEMP_PULLUP_3
-            int "Pullup Resistor ADC 3"
-            range 0 1000000
-            default 1200
-
-        config MOTOR_TEMPERATURE_ADC_4
-            bool "Motor Temp ADC 4"
-            default n
-        config MOTOR_TEMP_PULLUP_4
-            int "Pullup Resistor ADC 4"
-            range 0 1000000
-            default 1200
-
-        config MOTOR_TEMPERATURE_ADC_5
-            bool "Motor Temp ADC 5"
-            default n
-        config MOTOR_TEMP_PULLUP_5
-            int "Pullup Resistor ADC 5"
-            range 0 1000000
-            default 1200
-
-        config MOTOR_TEMPERATURE_ADC_6
-            bool "Motor Temp ADC 6"
-            default n
-        config MOTOR_TEMP_PULLUP_6
-            int "Pullup Resistor ADC 6"
-            range 0 1000000
-            default 1200
-
-        config MOTOR_TEMPERATURE_ADC_7
-            bool "Motor Temp ADC 7"
-            default n
-        config MOTOR_TEMP_PULLUP_7
-            int "Pullup Resistor ADC 7"
+        config PREVCU_BR_ADC_NUM
+            int "Front Right ADC Address"
+            range 0 7
+            default 3
+        config PREVCU_BR_PULLUP
+            int "Front Left Pullup Resistor"
             range 0 1000000
             default 1200
     endmenu
@@ -316,7 +311,7 @@ menu "VCU Configuration"
                 rate in milliseconds
 
         config PREVCU_READ_CONTROLLER_TEMP_PERIOD
-            int "Read Motor Controller Temperature Period"
+            int "Read Motor Controller Temperature Period (rounded up to throttle multiple)"
             range 1 10000
             default 1000
             help

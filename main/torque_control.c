@@ -17,8 +17,15 @@
 
 static const char *TAG = "example";
 
-
-uint16_t mc_id[4];
+struct
+{
+    uint16_t fl, fr, bl, br;
+} mc_ids = {
+    .fl = PREVCU_FL_ADDR,
+    .fr = PREVCU_FR_ADDR,
+    .bl = PREVCU_BL_ADDR,
+    .br = PREVCU_BR_ADDR,
+};
 
 typedef struct queue_element_t
 {
@@ -34,10 +41,11 @@ typedef struct our_handles_t
     spi_handle_t gyroscope;
 } our_handles_t;
 
-typedef struct motor_temps_t
+typedef struct adc_update_t
 {
-   float[4] temps;
-} motor_temps_t;
+    float throttle_percent, temp_fl, temp_fr, temp_bl, temp_br;
+    bool includes_temp;
+} adc_update_t;
 
 our_handles_t setup()
 {
@@ -181,13 +189,20 @@ void read_accel()
     }
 }
 
-int16_t rot_reading_to_count(char *data)
+float rot_reading_conversion(char *data)
 {
     uint16_t ucounts = data[1];
     ucounts <<= 8;
     ucounts |= data[0];
     int16_t counts = ucounts;
 }
+
+typedef struct rot_data_t
+{
+    float x;
+    float y;
+    float z;
+} rot_data_t;
 
 void read_rot()
 {
@@ -203,16 +218,27 @@ void read_rot()
             .rx_buffer = data,
         };
         ESP_ERROR_CHECK(spi_device_transmit(rot_handle, &t));
-        int16_t x = rot_reading_to_count(data + 0);
-        int16_t y = rot_reading_to_count(data + 2);
-        int16_t z = rot_reading_to_count(data + 4);
-        // TODO add xyz to queue
+        rot_data_t rot_data;
+        rot_data.x = accel_reading_conversion(data + 0);
+        rot_data.y = accel_reading_conversion(data + 2);
+        rot_data.z = accel_reading_conversion(data + 4);
+        queue_element_t queue_element;
+        queue_element.header = ROT_QUEUE_HEADER;
+        memcpy(&queue_element.buffer, &rot_data, sizeof(rot_data));
+        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
         // TODO Block on waiting for interupt line to go high (level trigger) again
     }
 }
 
-float read_sas(uart_port_t sas_handle)
+typedef struct steering_data_t
 {
+    float left_wheel_radian;
+    float right_wheel_radian;
+} steering_data_t;
+
+void read_sas()
+{
+    uart_port_t sas_handle;
     TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;)
     {
@@ -231,150 +257,200 @@ float read_sas(uart_port_t sas_handle)
         ucounts <<= 8;
         ucounts |= data[0];
         int16_t counts = ucounts;
+        counts -= PREVCU_SAS_FORWARD;
+        if (counts < 0)
+        {
+            counts += 4096
+        }
         counts -= 2048;
-        // TODO: Add data to queue
-        vTaskDelayUntil(&xLastWakeTime, 100 / portTICK_PERIOD_MS); // 10 Hz
+        float rack_angle = counts / 2.f / 3.14159f;
+        steering_data_t steering_data = {
+            .left_wheel_radian = rack_angle,
+            .right_wheel_radian = rack_angle,
+        };
+        queue_element_t queue_element;
+        queue_element.header = STEERING_QUEUE_HEADER;
+        memcpy(&queue_element.buffer, &steering_data, sizeof(steering_data));
+        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_CONTROLLER_TEMP_PERIOD));
     }
 }
 
-motor_temps_t read_adc_task()
+// TODO: Switch to pulldown
+float adc_to_temp(uint16_t adc_val, float pullup)
+{
+    float ret;
+    float A = 0.0039083f;
+    float B = -0.0000005775f;
+    ret = 1.f * adc_val / 2048.f;
+    ret = (1.f - 0.001f * pullup * ret) / (1.f - ret);
+    ret = A * A - 4 * B * ret * ret;
+    ret = (-A - sqrtf(ret)) / 2.f / B;
+}
+
+void read_adc_task()
 {
     spi_device_handle_t adc_handle;
-    spi_transaction_t transmissions[5];
-    TickType_t xLastWakeTime;
-    uint8_t k;
-    uint8_t addresses[4];
-    float pullups[4];
-    uint16_t temp;
-    float A = 0.0039083.f;
-    float B = -0.0000005775.f;
-    float midval;
-#ifdef MOTOR_TEMPERATURE_ADC_0
-    addresses[k] = 0;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_0
-#endif
-#ifdef MOTOR_TEMPERATURE_ADC_1
-    addresses[k++] = 1;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_1
-#endif
-#ifdef MOTOR_TEMPERATURE_ADC_2
-    addresses[k++] = 2;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_2
-#endif
-#ifdef MOTOR_TEMPERATURE_ADC_3
-    addresses[k++] = 3;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_3
-#endif
-#ifdef MOTOR_TEMPERATURE_ADC_4
-    addresses[k++] = 4;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_4
-#endif
-#ifdef MOTOR_TEMPERATURE_ADC_5
-    addresses[k++] = 5;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_5
-#endif
-#ifdef MOTOR_TEMPERATURE_ADC_6
-    addresses[k++] = 6;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_6
-#endif
-#ifdef MOTOR_TEMPERATURE_ADC_7
-    addresses[k++] = 7;
-    pullups[k++] = (float) MOTOR_TEMP_PULLUP_7
-#endif
-    for (int adc_num = 0; adc_num < 4; ++adc_num) {
-       transmissions[adc_num] = {
-          .length = 11,
-          .cmd = 0x1,
-          .addr = addresses[adc_num],
-          .flags = SPI_TRANS_USE_RXDATA,
-       };
-    }
-    xLastWakeTime = xTaskGetTickCount();
+    spi_transaction_t throttle_transmission = {
+        .length = 11,
+        .addr = PREVCU_THROTTLE_ADC_NUM,
+        .cmd = 0x1,
+        .flags = SPI_TRANS_USE_RXDATA,
+    };
+    struct
+    {
+        spi_transaction_t fl, fr, bl, br;
+    } transmissions = {
+        .fl = throttle_transmission,
+        .fr = throttle_transmission,
+        .bl = throttle_transmission,
+        .br = throttle_transmission,
+    };
+    transmission.fl.addr = PREVCU_FL_ADC_NUM;
+    transmission.fr.addr = PREVCU_FR_ADC_NUM;
+    transmission.bl.addr = PREVCU_BL_ADC_NUM;
+    transmission.br.addr = PREVCU_BR_ADC_NUM;
+
+    TickType_t xLastWakeTime = xTaskGetTickCount();
+    uint16_t divisor = (PREVCU_READ_CONTROLLER_TEMP_PERIOD + PREVCU_READ_THROTTLE_PERIOD - 1) / PREVCU_READ_THROTTLE_PERIOD;
+    uint16_t current_count = 0;
     for (;;)
     {
-        uint16_t data[4];
-            // queue them all at once so that we have to switch context less (hopefully)
+        adc_update_t update;
+        uint8_t read_temps = 0;
+        if (current_count == 0)
+        {
+            update.includes_temp = true;
+            read_temps = 4;
+            current_count = divisor;
         }
-        for (int adc_num = 0; adc_num < 4; ++adc_num) {
-            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, transmissions + adc_num, portMAX_DELAY));
+        else
+        {
+            update.includes_temp = false;
+            --current_count;
         }
-        for (int i = 0; i < 4; ++i)
+        // queue them all at once so that we have to switch context less (hopefully)
+        ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &throttle_transmission, portMAX_DELAY));
+        if (read_temps)
+        {
+            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.fl, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.fr, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.bl, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.br, portMAX_DELAY));
+        }
+        for (int i = 0; i < 1 + read_temps; ++i)
         {
             spi_transaction_t *completed_transmission; // will point one of the positions in the array above
             ESP_ERROR_CHECK(spi_device_get_trans_result(adc_handle, &completed_transmission, portMAX_DELAY));
-            if (unlikely(completed_transmission - transmissions > 4))
+            uint16_t adc_result = completed_transmission->rx_data[0] & 0x3;
+            uint16_t adc_result <<= 8;
+            uint16_t adc_result |= completed_transmission->rx_data[1];
+            if (completed_transmission == &throttle_transmission)
             {
-                abort();
+                update.throttle_percent = adc_result / 2048.f * 100.f;
+                if (update.throttle_percent > PREVCU_ERR_MAX_THROTTLE_PERCENT)
+                {
+                    // error
+                }
+                if (update.throttle_percent < PREVCU_ERR_MIN_THROTTLE_PERCENT)
+                {
+                    // error
+                }
+                update.throttle_percent = (update.throttle_percent - PREVCU_MIN_THROTTLE_PERCENT) / (PREVCU_MAX_THROTTLE_PERCENT - PREVCU_MIN_THROTTLE_PERCENT);
             }
-            int adc_num = completed_transmission->addr;
-            data[adc_num] = t.rx_data[0] & 0x3;
-            data[adc_num] <<= 8;
-            data[adc_num] |= t.rx_data[1];
+            else if (read_temps)
+            {
+                if (completed_transmission == &transmissions.fl)
+                {
+                    update.temp_fl = adc_to_temp(adc_result, PREVCU_FL_PULLUP);
+                }
+                else if (completed_transmission == &transmissions.fr)
+                {
+                    update.temp_fr = adc_to_temp(adc_result, PREVCU_FR_PULLUP);
+                }
+                else if (completed_transmission == &transmissions.bl)
+                {
+                    update.temp_bl = adc_to_temp(adc_result, PREVCU_BL_PULLUP);
+                }
+                else if (completed_transmission == &transmissions.br)
+                {
+                    update.temp_br = adc_to_temp(adc_result, PREVCU_BR_PULLUP);
+                }
+                else
+                {
+                    // Error
+                }
+            }
+            else
+            {
+                // error
+            }
         }
-        motor_temps_t motortemps;
-        // TODO: add data to queue
-        for (int i = 0; i < 4; ++i) {
-           midval = 1.f*data[i]/2048.f;
-           midval = (1.f-0.001f*pullups*midval)/(1.f-midval);
-           midval = A * A - 4 * B * midval * midval;
-           midval = (-A-sqrtf(midval))/2.f/B;
-           motortemps.temps[i] = midval;
-        }
-        vTaskDelayUntil(&xLastWakeTime, 4 / portTICK_PERIOD_MS); // 250 Hz
+        queue_element_t queue_element;
+        queue_element.header = ADC_UPDATE_HEADER;
+        memcpy(&queue_element.buffer, &update, sizeof(update));
+        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_THROTTLE_PERIOD));
     }
-return motortemps;
 }
 
-void read_data(unsigned int address, unsigned int sub_index){
-  uint8_t b1 = (address >> 8);
-  uint8_t b2 = (address >> 0);
-  can_message_t message;
-  for (i = 0; i < 4; i++) {
-    message.identifier = 0x600 + mc_id[i];
-    message.data_length_code = 8;
-    message.data = {
-        0x40,
-        // info address little endian
-        b2,
-        b1,
-        sub_index,
-        // zeroes for padding
-        0x00,
-        0x00,
-        0x00,
-        0x00,
-    }   
-    // Queue message for transmission
-    if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_CAN_TIMEOUT)) != ESP_OK)
+void read_data(unsigned int address, unsigned int sub_index)
+{
+    uint8_t b1 = (address >> 8);
+    uint8_t b2 = (address >> 0);
+    can_message_t message;
+    uint16_t id_array = {mc_ids.fl, mc_ids.fr, mc_ids.bl, mc_ids.br};
+    for (i = 0; i < 4; i++)
     {
-        // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
+        message.identifier = 0x600 + id_array[i];
+        message.data_length_code = 8;
+        message.data = {
+            0x40,
+            // info address little endian
+            b2,
+            b1,
+            sub_index,
+            // zeroes for padding
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+        }
+        // Queue message for transmission
+        if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_CAN_TIMEOUT)) != ESP_OK)
+        {
+            // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
+        }
     }
-  }
-  
-  Serial.println("Packet Sent - Data Read Request");
 }
 
-void read_speeds() {
+void read_speeds()
+{
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    for(;;) {
+    for (;;)
+    {
         read_data(0x606C, 0x00);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_SPEEDS_PERIOD));\
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_SPEEDS_PERIOD));
     }
 }
 
-void read_mc_temps() {
+void read_mc_temps()
+{
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    for(;;) {
+    for (;;)
+    {
         read_data(0x2026, 0x00);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_CONTROLLER_TEMP_PERIOD));\
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_CONTROLLER_TEMP_PERIOD));
     }
 }
 
-void read_real_torque() {
+void read_real_torque()
+{
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    for(;;) {
+    for (;;)
+    {
         read_data(0x6077, 0x00);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_MOTOR_TORQUE_PERIOD));\
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_MOTOR_TORQUE_PERIOD));
     }
 }
 
@@ -398,7 +474,7 @@ void send_torque()
         };
 
         // Queue message for transmission
-        if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_SEND_TORQUE_PERIOD / 2)) != ESP_OK)
+        if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_CAN_TIMEOUT)) != ESP_OK)
         {
             // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
         }
@@ -421,7 +497,7 @@ void can_receive()
                 max(current_time - last_heartbeat_message[0],
                     current_time - last_heartbeat_message[1]),
                 current_time - last_heartbeat_message[2]),
-            current_time - current_time - last_heartbeat_message[3]);
+            current_time - last_heartbeat_message[3]);
         if (max_time_diff >= pdMS_TO_TICKS(500))
         {
             ticks_till_timeout = 0
