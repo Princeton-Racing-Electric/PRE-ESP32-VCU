@@ -191,32 +191,32 @@ menu "VCU Configuration"
             int "Front Right ADC Address"
             range 0 7
             default 0
-        config PREVCU_FL_PULLUP
-            int "Front Left Pullup Resistor"
+        config PREVCU_FL_PULLDOWN
+            int "Front Left Pulldown Resistor"
             range 0 1000000
             default 1200
         config PREVCU_FR_ADC_NUM
             int "Front Right ADC Address"
             range 0 7
             default 1
-        config PREVCU_FR_PULLUP
-            int "Front Left Pullup Resistor"
+        config PREVCU_FR_PULLDOWN
+            int "Front Left Pulldown Resistor"
             range 0 1000000
             default 1200
         config PREVCU_BL_ADC_NUM
             int "Front Right ADC Address"
             range 0 7
             default 2
-        config PREVCU_BL_PULLUP
-            int "Front Left Pullup Resistor"
+        config PREVCU_BL_PULLDOWN
+            int "Front Left Pulldown Resistor"
             range 0 1000000
             default 1200
         config PREVCU_BR_ADC_NUM
             int "Front Right ADC Address"
             range 0 7
             default 3
-        config PREVCU_BR_PULLUP
-            int "Front Left Pullup Resistor"
+        config PREVCU_BR_PULLDOWN
+            int "Front Left Pulldown Resistor"
             range 0 1000000
             default 1200
     endmenu
