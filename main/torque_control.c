@@ -51,6 +51,18 @@ static void IRAM_ATTR wake_task_isr(void *args)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
+void write_imu(spi_handle_t imu, uint8_t addr, uint8_t data)
+{
+    t = {
+        .length = 8,
+        .cmd = 0x0,
+        .addr = addr,
+        .flags = SPI_TRANS_USE_TXDATA,
+        .tx_data = {data},
+    };
+    ESP_ERROR_CHECK(spi_device_transmit(imu, &t));
+}
+
 void setup()
 {
     esp_err_t err;
@@ -110,14 +122,29 @@ void setup()
     };
     ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &accelerometer_device_config, &handles->accelerometer));
 
-    // TODO: wait some time
-
+    vTaskDelay(pdMS_TO_TICKS(1));
     // dummy accelerometer spi read to activate spi
-    read_imu_addr(handles->acceleromter, 0x00);
-    // turn accelerometer on
-    write_imu_addr(handles->accelerometer, 0x7D, 0x4);
-
-    // TODO: set odr and osr, and range
+    spi_transaction_t t = {
+        .rxlength = 16,
+        .flags = SPI_TRANS_USE_RXDATA,
+        .cmd = 0x1,
+        .addr = 0x0,
+    };
+    ESP_ERROR_CHECK(spi_device_transmit(handles->accelerometer, &t));
+    vTaskDelay(pdMS_TO_TICKS(1));
+    write_imu(handles->accelerometer, 0x7D, 0x4);
+    vTaskDelay(pdMS_TO_TICKS(50));
+    write_imu(handles->accelerometer, 0x52 + PREVCU_ACCEL_INT, 0xC + 0x4 * PREVCU_ACCEL_INT_TYPE);
+    if (PREVCU_ACCEL_INT == 1)
+    {
+        write_imu(handles->accelerometer, 0x58, 0x4);
+    }
+    else
+    {
+        write_imu(handles->accelerometer, 0x58, 0x40);
+    }
+    write_imu(handles->accelerometer, 0x41, PREVCU_ACCEL_FULL_SCALE);
+    write_imu(handles->accelerometer, 0x40, PREVCU_ACCEL_OVERSAMPLING << 4 | PREVCU_ACCEL_ODR);
 
     spi_device_interface_config_t gyroscope_device_config = {
         .flags = SPI_DEVICE_HALFDUPLEX,
@@ -133,9 +160,22 @@ void setup()
         .queue_size = 3,
     };
     ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &gyroscope_device_config, &handles->gyroscope));
-    // TODO: wait some time
 
-    // TODO: set odr and osr, and range
+    vTaskDelay(pdMS_TO_TICKS(1));
+
+    write_imu(handles->gyroscope, 0x15, 0x80);
+    if (PREVCU_GYRO_INT == 3)
+    {
+        write_imu(handles->gyroscope, 0x16, PREVCU_GYRO_INT_TYPE << 1);
+        write_imu(handles->gyroscope, 0x18, 0x01);
+    }
+    else
+    {
+        write_imu(handles->gyroscope, 0x16, PREVCU_GYRO_INT_TYPE << 3);
+        write_imu(handles->gyroscope, 0x18, 0x80);
+    }
+    write_imu(handles->gyroscope, 0xF, PREVCU_GYRO_FULL_SCALE);
+    write_imu(handles->gyroscope, 0x10, PREVCU_GYRO_ODR);
 
     can_general_config_t g_config = CAN_GENERAL_CONFIG_DEFAULT(PREVCU_CANTX_GPIO, PREVCU_CANRX_GPIO, CAN_MODE_NORMAL);
     can_timing_config_t t_config = CAN_TIMING_CONFIG_500KBITS();
