@@ -11,7 +11,7 @@ Welcome to the VCU repo! This is all written in native C, with RTOS as the under
    1. Rate: 50Hz
    2. Priority: 9 (should be high)
 3. Read Throttle
-   1. Rate: 50Hz
+   1. Rate: 100Hz
    2. Priority: 8
 4. Read Acceleration
    1. Rate: 800Hz (based off of interupts of when its ready, but the low pass filter can be set programatically)

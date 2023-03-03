@@ -17,21 +17,13 @@
 
 static const char *TAG = "example";
 
-struct
-{
-    uint16_t fl, fr, bl, br;
-} mc_ids = {
-    .fl = PREVCU_FL_ADDR,
-    .fr = PREVCU_FR_ADDR,
-    .bl = PREVCU_BL_ADDR,
-    .br = PREVCU_BR_ADDR,
-};
-
 typedef struct queue_element_t
 {
     uint16_t queue_header;
-    char[64] buffer;
+    char[32] buffer;
 } queue_element_t;
+
+uint16_t id_array = {PREVCU_FL_ADDR, PREVCU_FR_ADDR, PREVCU_BL_ADDR, PREVCU_BR_ADDR};
 
 typedef struct our_handles_t
 {
@@ -41,11 +33,13 @@ typedef struct our_handles_t
     spi_handle_t gyroscope;
 } our_handles_t;
 
-typedef struct adc_update_t
+static void IRAM_ATTR wake_task_isr(void *args)
 {
-    float throttle_percent, temp_fl, temp_fr, temp_bl, temp_br;
-    bool includes_temp;
-} adc_update_t;
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+    TaskHandle_t = (TaskHandle_t)args;
+    xTaskNotifyIndexedFromISR(xHandlingTask, 0, 0, eNoAction, &xHigherPriorityTaskWoken);
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+}
 
 our_handles_t setup()
 {
@@ -141,7 +135,20 @@ our_handles_t setup()
     ESP_ERROR_CHECK(can_driver_install(&g_config, &t_config, &f_config))
     ESP_ERROR_CHECK(can_start());
 
-    QueueHandle_t xQueueCreate(10, sizeof(queue_element_t));
+    QueueHandle_t queue_handle = xQueueCreate(10, sizeof(queue_element_t));
+
+    gpio_pad_select_gpio(PREVCU_ACCEL_INT_GPIO);
+    gpio_pad_select_gpio(PREVCU_GYRO_INT_GPIO);
+    gpio_set_direction(PREVCU_ACCEL_INT_GPIO, GPIO_MODE_INPUT);
+    gpio_set_direction(PREVCU_GYRO_INT_GPIO, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(PREVCU_ACCEL_INT_GPIO, GPIO_FLOATING);
+    gpio_set_pull_mode(PREVCU_GYRO_INT_GPIO, GPIO_FLOATING);
+    gpio_set_intr_type(PREVCU_ACCEL_INT_GPIO, GPIO_INTR_POSEDGE);
+    gpio_set_intr_type(PREVCU_GYRO_INT_GPIO, GPIO_INTR_POSEDGE);
+
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(PREVCU_ACCEL_INT_GPIO, wake_task_isr, (void *)read_accel_task_handle);
+    gpio_isr_handler_add(PREVCU_GYRO_INT_GPIO, wake_task_isr, (void *)read_gyro_task_handle);
 
     return handles;
 }
@@ -154,8 +161,9 @@ float accel_reading_conversion(char *data)
     int16_t counts = ucounts;
 }
 
-typedef struct accel_data_t
+typedef struct accel_update_t
 {
+    TickType_t time;
     float x;
     float y;
     float z;
@@ -176,16 +184,18 @@ void read_accel()
             .rx_buffer = data,
         };
         ESP_ERROR_CHECK(spi_device_transmit(accel_handle, &t));
-        acccel_data_t accel_data;
+        accel_update_t accel_data;
         accel_data.x = accel_reading_conversion(data + 1);
         accel_data.y = accel_reading_conversion(data + 3);
         accel_data.z = accel_reading_conversion(data + 5);
         queue_element_t queue_element;
         queue_element.header = ACCEL_QUEUE_HEADER;
+        accel_data.time = xTaskGetTickCount();
         memcpy(&queue_element.buffer, &accel_data, sizeof(accel_data));
 
         xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
-        // TODO Block on waiting for interupt line to go high (level trigger) again
+        // just block me until the ISR tells me to go again
+        xTaskNotifyWaitIndexed(0, 0, 0, NULL, portMAX_DELAY);
     }
 }
 
@@ -197,8 +207,9 @@ float rot_reading_conversion(char *data)
     int16_t counts = ucounts;
 }
 
-typedef struct rot_data_t
+typedef struct rot_update_t
 {
+    TickType_t time;
     float x;
     float y;
     float z;
@@ -218,20 +229,24 @@ void read_rot()
             .rx_buffer = data,
         };
         ESP_ERROR_CHECK(spi_device_transmit(rot_handle, &t));
-        rot_data_t rot_data;
+        rot_update_t rot_data;
         rot_data.x = accel_reading_conversion(data + 0);
         rot_data.y = accel_reading_conversion(data + 2);
         rot_data.z = accel_reading_conversion(data + 4);
         queue_element_t queue_element;
         queue_element.header = ROT_QUEUE_HEADER;
+        rot_data.time = xTaskGetTickCount();
+
         memcpy(&queue_element.buffer, &rot_data, sizeof(rot_data));
         xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
-        // TODO Block on waiting for interupt line to go high (level trigger) again
+        // just block me until the ISR tells me to go again
+        xTaskNotifyWaitIndexed(0, 0, 0, NULL, portMAX_DELAY);
     }
 }
 
 typedef struct steering_data_t
 {
+    TickType_t time;
     float left_wheel_radian;
     float right_wheel_radian;
 } steering_data_t;
@@ -264,12 +279,14 @@ void read_sas()
         }
         counts -= 2048;
         float rack_angle = counts / 2.f / 3.14159f;
-        steering_data_t steering_data = {
+        steering_update_t steering_data = {
             .left_wheel_radian = rack_angle,
             .right_wheel_radian = rack_angle,
         };
         queue_element_t queue_element;
         queue_element.header = STEERING_QUEUE_HEADER;
+        steering_data.time = xTaskGetTickCount();
+
         memcpy(&queue_element.buffer, &steering_data, sizeof(steering_data));
         xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_CONTROLLER_TEMP_PERIOD));
@@ -287,6 +304,13 @@ float adc_to_temp(uint16_t adc_val, float pullup)
     ret = A * A - 4 * B * ret * ret;
     ret = (-A - sqrtf(ret)) / 2.f / B;
 }
+
+typedef struct adc_update_t
+{
+    TickType_t time;
+    float throttle_percent, temp_fl, temp_fr, temp_bl, temp_br;
+    bool includes_temp;
+} adc_update_t;
 
 void read_adc_task()
 {
@@ -357,6 +381,15 @@ void read_adc_task()
                     // error
                 }
                 update.throttle_percent = (update.throttle_percent - PREVCU_MIN_THROTTLE_PERCENT) / (PREVCU_MAX_THROTTLE_PERCENT - PREVCU_MIN_THROTTLE_PERCENT);
+                if (throttle_percent < 0)
+                {
+                    throttle_percent = 0;
+                }
+                if (throttle_percent > 1)
+                {
+                    throttle_percent = 1
+                }
+                xTaskNotifyIndexed(send_torque_task_handle, 0, floor(throttle_percent * 255), eSetValueWithOverwrite);
             }
             else if (read_temps)
             {
@@ -386,6 +419,8 @@ void read_adc_task()
                 // error
             }
         }
+        update.time = xTaskGetTickCount();
+
         queue_element_t queue_element;
         queue_element.header = ADC_UPDATE_HEADER;
         memcpy(&queue_element.buffer, &update, sizeof(update));
@@ -399,7 +434,6 @@ void read_data(unsigned int address, unsigned int sub_index)
     uint8_t b1 = (address >> 8);
     uint8_t b2 = (address >> 0);
     can_message_t message;
-    uint16_t id_array = {mc_ids.fl, mc_ids.fr, mc_ids.bl, mc_ids.br};
     for (i = 0; i < 4; i++)
     {
         message.identifier = 0x600 + id_array[i];
@@ -457,42 +491,93 @@ void read_real_torque()
 void send_torque()
 {
     TickType_t xLastWakeTime = xTaskGetTickCount();
+    uint32_t direct_torque_long;
+    uint32_t calculated_torque_long;
+    uint8_t torques[4];
     for (;;)
     {
-        can_message_t message;
-        message.identifier = 0x600 + mc_id;
-        message.data_length_code = 8;
-        message.data = {
-            0x2B, // magic numbers for CANopen
-            0x71,
-            0x60, // 0x6071 is the specifier
-            0x00,
-            torque, // 0-256
-            0x0,
-            0x0, // CANopen padding
-            0x0,
-        };
-
-        // Queue message for transmission
-        if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_CAN_TIMEOUT)) != ESP_OK)
+        uint8_t torque;
+        xTaskNotifyAndQueryIndexed(send_torque_task_handle, 1, 0, eNoAction, &calculated_torque_long);
+        if (!xTaskNotifyWaitIndexed(0, 0, 0, &direct_torque_long, 0))
         {
-            // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
+            // we didn't recieve a torque update, despite that updating twice as often. Abort immediately
+        }
+        if (direct_torque_long == 0)
+        {
+            // The driver has lifted their foot off the pedal. No matter what, we need to stop
+            torques = {0, 0, 0, 0};
+        }
+        else
+        {
+            torques[0] = calculated_torque_long;       // fl
+            torques[1] = calculated_torque_long >> 8;  // fr
+            torques[2] = calculated_torque_long >> 16; // bl
+            torques[3] = calculated_torque_long >> 24; // br
+        }
+
+        for (int i = 0; i < 4; ++i)
+        {
+            can_message_t message;
+            message.identifier = 0x600 + id_array[i];
+            message.data_length_code = 8;
+            message.data = {
+                0x2B, // magic numbers for CANopen
+                0x71,
+                0x60, // 0x6071 is the specifier
+                0x00,
+                torques[i], // 0-255
+                0x0,
+                0x0, // CANopen padding
+                0x0,
+            };
+
+            // Queue message for transmission
+            if (can_transmit(&message, pdMS_TO_TICKS(PREVCU_CAN_TIMEOUT)) != ESP_OK)
+            {
+                // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
+            }
         }
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_SEND_TORQUE_PERIOD));
     }
 }
+typedef struct speed_update_t
+{
+    TickType_t time;
+    int32_t[4] speeds;
+} speed_update_t;
+
+typedef struct mc_temp_update_t
+{
+    TickType_t time;
+    uint8_t[4] temperatures;
+} mc_temp_update_t;
+
+typedef struct mc_torque_update_t
+{
+    TickType_t time;
+    uint16_t[4] torques;
+} mc_torque_update_t;
 
 // takes care of all of the receiving
-void can_receive()
+void can_receive_task()
 {
     TickType_t current_time = xTaskGetTickCount();
     TickType_t last_heartbeat_message[4] = {current_time, current_time, current_time, current_time};
+
+    uint32_t latest_speeds[4];
+    uint8_t waiting_speeds = 0;
+
+    uint8_t latest_mc_temps[4];
+    uint8_t waiting_mc_temps = 0;
+
+    uint16_t latest_torques[4];
+    uint8_t waiting_torques = 0;
     for (;;)
     {
         TickType_t ticks_till_timeout;
         current_time = xTaskGetTickCount();
         // TODO: Replace subtraction with something overflow aware
-        max_time_diff = max(
+        TickType_t max_time_diff = max(
             max(
                 max(current_time - last_heartbeat_message[0],
                     current_time - last_heartbeat_message[1]),
@@ -512,10 +597,99 @@ void can_receive()
         {
             // report heartbeat timeout error and shutdown
         }
-        // process the message:
-        // message.identifier
-        // message.data_length_code
-        // message.data
+        uint16_t command = message.identifier & 0x780;
+        uint16_t node_id = message.identifier - 0x7F;
+
+        uint8_t index;
+        switch (node_id)
+        {
+        case PREVCU_FL_ADDR:
+            index = 0;
+            break;
+        case PREVCU_FR_ADDR:
+            index = 1;
+            break;
+        case PREVCU_BL_ADDR:
+            index = 2;
+            break;
+        case PREVCU_BR_ADDR:
+            index = 3;
+            break;
+        default:
+            // we got a message we didn't expect.
+        }
+        if (command == 0x700)
+        {
+            last_heartbeat_messsage[index] = xTaskGetTickCount();
+            return;
+        }
+        else if (command == 0x580)
+        {
+            uint32_t index_and_subindex = message.data[1];
+            index_and_subindex <<= 8;
+            index_and_subindex |= message.data[2];
+            index_and_subindex <<= 8;
+            index_and_subindex |= message.data[3];
+            switch (index_and_subindex)
+            {
+            case 0x606C00:
+                // speed
+                latest_speeds[index] = message.data[4];
+                latest_speeds[index] <<= 8;
+                latest_speeds[index] |= message.data[5];
+                latest_speeds[index] <<= 8;
+                latest_speeds[index] |= message.data[6];
+                latest_speeds[index] <<= 8;
+                latest_speeds[index] |= message.data[7];
+                waiting_speeds |= 1 << index;
+                if (waiting_speeds == 0xF)
+                {
+                    waiting_speeds = 0;
+                    queue_element_t queue_element;
+                    queue_element.header = SPEED_UPDATE_HEADER;
+                    speed_update_t update;
+                    update.time = xTaskGetTickCount();
+                    update.speeds = latest_speeds;
+                    memcpy(&queue_element.buffer, &update, sizeof(update));
+                    xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+                }
+                break;
+            case 0x202600:
+                latest_mc_temps[index] = message.data[4];
+                waiting_mc_temps |= 1 << index;
+                if (waiting_mc_temps == 0xF)
+                {
+                    waiting_mc_temps = 0;
+                    queue_element_t queue_element;
+                    queue_element.header = MC_TEMP_UPDATE_HEADER;
+                    mc_temp_update_t update;
+                    update.time = xTaskGetTickCount();
+                    update.temperatures = latest_mc_temps;
+                    memcpy(&queue_element.buffer, &update, sizeof(update));
+                    xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+                }
+                break;
+            case 0x607700:
+                latest_torques[index] = message.data[4];
+                latest_torques[index] <<= 8;
+                latest_torques[index] |= message.data[5];
+                waiting_torques |= 1 << index;
+                if (waiting_torques == 0xF)
+                {
+                    waiting_torques = 0;
+                    queue_element_t queue_element;
+                    queue_element.header = MC_TORQUE_UPDATE_HEADER;
+                    mc_torque_update_t update;
+                    update.time = xTaskGetTickCount();
+                    update.temperatures = latest_torques;
+                    memcpy(&queue_element.buffer, &update, sizeof(update));
+                    xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+                }
+                break;
+            default:
+                // we got a message we didnt expect
+            }
+        }
     }
 }
 
