@@ -31,17 +31,27 @@ typedef struct our_handles_t
     uart_port_t sas;
     spi_handle_t accelerometer;
     spi_handle_t gyroscope;
+    QueueHandle_t queue_handle;
+    TaskHandle_t can_receive_th;
+    TaskHandle_t send_torque_th;
+    TaskHandle_t adc_update_th;
+    TaskHandle_t read_accel_th;
+    TaskHandle_t read_speeds_th;
+    TaskHandle_t read_torque_th;
+    TaskHandle_t read_gyro_th;
+    TaskHandle_t read_mc_temps_th;
+    TaskHandle_t read_sas_th;
 } our_handles_t;
 
 static void IRAM_ATTR wake_task_isr(void *args)
 {
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
     TaskHandle_t = (TaskHandle_t)args;
-    xTaskNotifyIndexedFromISR(xHandlingTask, 0, 0, eNoAction, &xHigherPriorityTaskWoken);
+    xTaskNotifyIndexedFromISR(xHandlingTask, 1, 0, eNoAction, &xHigherPriorityTaskWoken);
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-our_handles_t setup()
+void setup()
 {
     esp_err_t err;
     spi_bus_config_t buscfg = {
@@ -68,8 +78,8 @@ our_handles_t setup()
         .cs_ena_posttrans = 3, // Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
         .queue_size = 8,
     };
-    our_handles_t handles;
-    ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &adc_device_config, &handles.adc));
+    our_handles_t *handles = malloc(sizeof(our_handles_t));
+    ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &adc_device_config, &handles->adc));
     uart_config_t uart_config = {
         .baud_rate = 2000000,
         .data_bits = UART_DATA_8_BITS,
@@ -78,8 +88,8 @@ our_handles_t setup()
         .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    handles.sas = UART_NUM_0;
-    ESP_ERROR_CHECK(uart_driver_install(handles.sas, 32, 32, 0, NULL, 0));
+    handles->sas = UART_NUM_0;
+    ESP_ERROR_CHECK(uart_driver_install(handles->sas, 32, 32, 0, NULL, 0));
     ESP_ERROR_CHECK(uart_param_config(uart_num, &uart_config));
     ESP_ERROR_CHECK(uart_set_pin(uart_num, GPIO_SAS_TX, GPIO_SAS_RX, SAS_RTS_PIN, UART_PIN_NO_CHANGE));
     ESP_ERROR_CHECK(uart_set_mode(uart_num, UART_MODE_RS485_HALF_DUPLEX));
@@ -98,14 +108,14 @@ our_handles_t setup()
         .cs_ena_posttrans = 3, // Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
         .queue_size = 3,
     };
-    ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &accelerometer_device_config, &handles.accelerometer));
+    ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &accelerometer_device_config, &handles->accelerometer));
 
     // TODO: wait some time
 
     // dummy accelerometer spi read to activate spi
-    read_imu_addr(handles.acceleromter, 0x00);
+    read_imu_addr(handles->acceleromter, 0x00);
     // turn accelerometer on
-    write_imu_addr(handles.accelerometer, 0x7D, 0x4);
+    write_imu_addr(handles->accelerometer, 0x7D, 0x4);
 
     // TODO: set odr and osr, and range
 
@@ -122,7 +132,7 @@ our_handles_t setup()
         .cs_ena_posttrans = 3, // Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
         .queue_size = 3,
     };
-    ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &gyroscope_device_config, &handles.gyroscope));
+    ESP_ERROR_CHECK(spi_bus_add_device(SENDER_HOST, &gyroscope_device_config, &handles->gyroscope));
     // TODO: wait some time
 
     // TODO: set odr and osr, and range
@@ -135,7 +145,7 @@ our_handles_t setup()
     ESP_ERROR_CHECK(can_driver_install(&g_config, &t_config, &f_config))
     ESP_ERROR_CHECK(can_start());
 
-    QueueHandle_t queue_handle = xQueueCreate(10, sizeof(queue_element_t));
+    handles->queue_handle = xQueueCreate(10, sizeof(queue_element_t));
 
     gpio_pad_select_gpio(PREVCU_ACCEL_INT_GPIO);
     gpio_pad_select_gpio(PREVCU_GYRO_INT_GPIO);
@@ -146,11 +156,43 @@ our_handles_t setup()
     gpio_set_intr_type(PREVCU_ACCEL_INT_GPIO, GPIO_INTR_POSEDGE);
     gpio_set_intr_type(PREVCU_GYRO_INT_GPIO, GPIO_INTR_POSEDGE);
 
-    gpio_install_isr_service(0);
-    gpio_isr_handler_add(PREVCU_ACCEL_INT_GPIO, wake_task_isr, (void *)read_accel_task_handle);
-    gpio_isr_handler_add(PREVCU_GYRO_INT_GPIO, wake_task_isr, (void *)read_gyro_task_handle);
+    xTaskCreate(can_receive_task, "Can Receive", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_RECEIVE_CAN_PRIORITY, &handles->can_receive_th);
+    xTaskCreate(send_torque_task, "Send Torque", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_SEND_TORQUE_PRIORITY, &handles->send_torque_th);
+    xTaskCreate(adc_update_task, "Adc Update", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_READ_THROTTLE_PRIORITY, &handles->read_adc_update_th);
+    xTaskCreate(read_accel_task, "Read Accel", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_READ_ACCEL_PRIORITY, &handles->read_accel_th);
+    xTaskCreate(read_speeds_task, "Read Speeds", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_READ_SPEED_PRIORITY, &handles->read_speeds_th);
+    xTaskCreate(read_torque_task, "Read Torque", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_READ_TORQUE_PRIORITY, &handles->read_torque_th);
+    xTaskCreate(read_gyro_task, "Read Gyro", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_READ_GYRO_PRIORITY, &handles->read_gyro_th);
+    xTaskCreate(read_mc_temps_task, "Read MC Temps", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_READ_CONTROLLER_TEMPS_PRIORITY, &handles->read_mc_temps_th);
+    xTaskCreate(read_sas_task, "Read SAS", configMINIMAL_SECURE_STACK_SIZE + 100, (void *)handles, PREVCU_READ_SAS_PRIORITY, &handles->read_sas_th);
 
-    return handles;
+    gpio_install_isr_service(0);
+    gpio_isr_handler_add(PREVCU_ACCEL_INT_GPIO, wake_task_isr, (void *)handles->read_accel_th);
+    gpio_isr_handler_add(PREVCU_GYRO_INT_GPIO, wake_task_isr, (void *)handles->read_gyro_th);
+
+    // MAYBE WAIT FOR SOME SIGNAL
+
+    // release all the tasks whose periodicity isn't controlled by us
+    xTaskNotifyIndexed(handles->can_receive_th, 0, 0, eNoAction);
+    xTaskNotifyIndexed(handles->read_accel_th, 0, 0, eNoAction);
+    xTaskNotifyIndexed(handles->read_gyro_th, 0, 0, eNoAction);
+    // offset the periodic ones by 7ms
+    xTaskNotifyIndexed(handles->adc_update_th, 0, 0, eNoAction);
+    vTaskDelay(pdMS_TO_TICKS(2 * PREVCU_READ_THROTTLE_PERIOD + 7));
+    xTaskNotifyIndexed(handles->send_torque_th, 0, 0, eNoAction);
+    vTaskDelay(pdMS_TO_TICKS(7));
+    xTaskNotifyIndexed(handles->read_speeds_th, 0, 0, eNoAction);
+    vTaskDelay(pdMS_TO_TICKS(7));
+    xTaskNotifyIndexed(handles->read_torque_th, 0, 0, eNoAction);
+    vTaskDelay(pdMS_TO_TICKS(7));
+    xTaskNotifyIndexed(handles->read_mc_temps_th, 0, 0, eNoAction);
+    vTaskDelay(pdMS_TO_TICKS(7));
+    xTaskNotifyIndexed(handles->read_sas_th, 0, 0, eNoAction);
+}
+
+void wait_for_start()
+{
+    xTaskNotifyWaitIndexed(0, 0, 0, NULL, portMAX_DELAY);
 }
 
 float accel_reading_conversion(char *data)
@@ -168,10 +210,10 @@ typedef struct accel_update_t
     float y;
     float z;
 } accel_data_t;
-void read_accel()
+void read_accel_task(void *handle_void)
 {
-    spi_device_handle_t accel_handle;
-
+    wait_to_start();
+    our_handles_t *handles = (our_handles_t *)handle_void;
     for (;;)
     {
 
@@ -183,7 +225,7 @@ void read_accel()
             .addr = 0x12,
             .rx_buffer = data,
         };
-        ESP_ERROR_CHECK(spi_device_transmit(accel_handle, &t));
+        ESP_ERROR_CHECK(spi_device_transmit(handles->accelerometer, &t));
         accel_update_t accel_data;
         accel_data.x = accel_reading_conversion(data + 1);
         accel_data.y = accel_reading_conversion(data + 3);
@@ -193,9 +235,9 @@ void read_accel()
         accel_data.time = xTaskGetTickCount();
         memcpy(&queue_element.buffer, &accel_data, sizeof(accel_data));
 
-        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+        xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
         // just block me until the ISR tells me to go again
-        xTaskNotifyWaitIndexed(0, 0, 0, NULL, portMAX_DELAY);
+        xTaskNotifyWaitIndexed(1, 0, 0, NULL, portMAX_DELAY);
     }
 }
 
@@ -215,9 +257,10 @@ typedef struct rot_update_t
     float z;
 } rot_data_t;
 
-void read_rot()
+void read_rot_task(void *handle_void)
 {
-    spi_device_handle_t rot_handle;
+    wait_to_start();
+    our_handles_t *handles = (our_handles_t *)handle_void;
     for (;;)
     {
         char data[8];
@@ -228,7 +271,7 @@ void read_rot()
             .addr = 0x02,
             .rx_buffer = data,
         };
-        ESP_ERROR_CHECK(spi_device_transmit(rot_handle, &t));
+        ESP_ERROR_CHECK(spi_device_transmit(handles->gyroscope, &t));
         rot_update_t rot_data;
         rot_data.x = accel_reading_conversion(data + 0);
         rot_data.y = accel_reading_conversion(data + 2);
@@ -238,9 +281,9 @@ void read_rot()
         rot_data.time = xTaskGetTickCount();
 
         memcpy(&queue_element.buffer, &rot_data, sizeof(rot_data));
-        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+        xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
         // just block me until the ISR tells me to go again
-        xTaskNotifyWaitIndexed(0, 0, 0, NULL, portMAX_DELAY);
+        xTaskNotifyWaitIndexed(1, 0, 0, NULL, portMAX_DELAY);
     }
 }
 
@@ -251,20 +294,21 @@ typedef struct steering_data_t
     float right_wheel_radian;
 } steering_data_t;
 
-void read_sas()
+void read_sas_task(void *handle_void)
 {
-    uart_port_t sas_handle;
+    wait_to_start();
+    our_handles_t *handles = (our_handles_t *)handle_void;
     TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;)
     {
         char addr = 0x54;
-        if (unlikely(uart_write_bytes(sas_handle, &addr, 1) != 1))
+        if (unlikely(uart_write_bytes(handles->sas, &addr, 1) != 1))
         {
             abort();
         }
-        ESP_ERROR_CHECK(uart_wait_tx_done(uart_num, portMAX_DELAY));
+        ESP_ERROR_CHECK(uart_wait_tx_done(handles->sas, portMAX_DELAY));
         char data[2];
-        if (unlikely(uart_read_bytes(sas_handle, data, 2, portMAX_DELAY) != 2))
+        if (unlikely(uart_read_bytes(handles->sas, data, 2, portMAX_DELAY) != 2))
         {
             abort();
         }
@@ -288,7 +332,7 @@ void read_sas()
         steering_data.time = xTaskGetTickCount();
 
         memcpy(&queue_element.buffer, &steering_data, sizeof(steering_data));
-        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+        xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_CONTROLLER_TEMP_PERIOD));
     }
 }
@@ -312,9 +356,10 @@ typedef struct adc_update_t
     bool includes_temp;
 } adc_update_t;
 
-void read_adc_task()
+void read_adc_task(void *void_handles)
 {
-    spi_device_handle_t adc_handle;
+    wait_to_start();
+    our_handles_t *handles = (our_handles_t *)handle_void;
     spi_transaction_t throttle_transmission = {
         .length = 11,
         .addr = PREVCU_THROTTLE_ADC_NUM,
@@ -354,18 +399,18 @@ void read_adc_task()
             --current_count;
         }
         // queue them all at once so that we have to switch context less (hopefully)
-        ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &throttle_transmission, portMAX_DELAY));
+        ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &throttle_transmission, portMAX_DELAY));
         if (read_temps)
         {
-            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.fl, portMAX_DELAY));
-            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.fr, portMAX_DELAY));
-            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.bl, portMAX_DELAY));
-            ESP_ERROR_CHECK(spi_device_queue_trans(adc_handle, &transmissions.br, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.fl, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.fr, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.bl, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.br, portMAX_DELAY));
         }
         for (int i = 0; i < 1 + read_temps; ++i)
         {
             spi_transaction_t *completed_transmission; // will point one of the positions in the array above
-            ESP_ERROR_CHECK(spi_device_get_trans_result(adc_handle, &completed_transmission, portMAX_DELAY));
+            ESP_ERROR_CHECK(spi_device_get_trans_result(handles->adc, &completed_transmission, portMAX_DELAY));
             uint16_t adc_result = completed_transmission->rx_data[0] & 0x3;
             uint16_t adc_result <<= 8;
             uint16_t adc_result |= completed_transmission->rx_data[1];
@@ -389,7 +434,7 @@ void read_adc_task()
                 {
                     throttle_percent = 1
                 }
-                xTaskNotifyIndexed(send_torque_task_handle, 0, floor(throttle_percent * 255), eSetValueWithOverwrite);
+                xTaskNotifyIndexed(handles->send_torque_th, 1, floor(throttle_percent * 255), eSetValueWithOverwrite);
             }
             else if (read_temps)
             {
@@ -424,12 +469,12 @@ void read_adc_task()
         queue_element_t queue_element;
         queue_element.header = ADC_UPDATE_HEADER;
         memcpy(&queue_element.buffer, &update, sizeof(update));
-        xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+        xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
         vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(PREVCU_READ_THROTTLE_PERIOD));
     }
 }
 
-void read_data(unsigned int address, unsigned int sub_index)
+void read_data_task(unsigned int address, unsigned int sub_index)
 {
     uint8_t b1 = (address >> 8);
     uint8_t b2 = (address >> 0);
@@ -458,8 +503,9 @@ void read_data(unsigned int address, unsigned int sub_index)
     }
 }
 
-void read_speeds()
+void read_speeds_task(void *)
 {
+    wait_for_start();
     TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;)
     {
@@ -468,8 +514,9 @@ void read_speeds()
     }
 }
 
-void read_mc_temps()
+void read_mc_temps_task(void *)
 {
+    wait_to_start();
     TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;)
     {
@@ -478,8 +525,9 @@ void read_mc_temps()
     }
 }
 
-void read_real_torque()
+void read_real_torque_task(void *)
 {
+    wait_to_start();
     TickType_t xLastWakeTime = xTaskGetTickCount();
     for (;;)
     {
@@ -488,8 +536,10 @@ void read_real_torque()
     }
 }
 
-void send_torque()
+void send_torque_task(void *handle_void)
 {
+    wait_to_start();
+    our_handles_t *handles = (our_handles_t *)handle_void;
     TickType_t xLastWakeTime = xTaskGetTickCount();
     uint32_t direct_torque_long;
     uint32_t calculated_torque_long;
@@ -497,8 +547,8 @@ void send_torque()
     for (;;)
     {
         uint8_t torque;
-        xTaskNotifyAndQueryIndexed(send_torque_task_handle, 1, 0, eNoAction, &calculated_torque_long);
-        if (!xTaskNotifyWaitIndexed(0, 0, 0, &direct_torque_long, 0))
+        xTaskNotifyAndQueryIndexed(handles->send_torque_th, 2, 0, eNoAction, &calculated_torque_long);
+        if (!xTaskNotifyWaitIndexed(1, 0, 0, &direct_torque_long, 0))
         {
             // we didn't recieve a torque update, despite that updating twice as often. Abort immediately
         }
@@ -559,8 +609,10 @@ typedef struct mc_torque_update_t
 } mc_torque_update_t;
 
 // takes care of all of the receiving
-void can_receive_task()
+void can_receive_task(void *handle_void)
 {
+    wait_to_start();
+    our_handles_t *handles = (our_handles_t *)handle_void;
     TickType_t current_time = xTaskGetTickCount();
     TickType_t last_heartbeat_message[4] = {current_time, current_time, current_time, current_time};
 
@@ -651,7 +703,7 @@ void can_receive_task()
                     update.time = xTaskGetTickCount();
                     update.speeds = latest_speeds;
                     memcpy(&queue_element.buffer, &update, sizeof(update));
-                    xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+                    xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
                 }
                 break;
             case 0x202600:
@@ -666,7 +718,7 @@ void can_receive_task()
                     update.time = xTaskGetTickCount();
                     update.temperatures = latest_mc_temps;
                     memcpy(&queue_element.buffer, &update, sizeof(update));
-                    xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+                    xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
                 }
                 break;
             case 0x607700:
@@ -683,7 +735,7 @@ void can_receive_task()
                     update.time = xTaskGetTickCount();
                     update.torques = latest_torques;
                     memcpy(&queue_element.buffer, &update, sizeof(update));
-                    xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
+                    xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
                 }
                 break;
             default:
@@ -695,8 +747,5 @@ void can_receive_task()
 
 void app_main(void)
 {
-
-    while (1)
-    {
-    }
+    setup();
 }
