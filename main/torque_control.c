@@ -681,7 +681,7 @@ void can_receive_task()
                     queue_element.header = MC_TORQUE_UPDATE_HEADER;
                     mc_torque_update_t update;
                     update.time = xTaskGetTickCount();
-                    update.temperatures = latest_torques;
+                    update.torques = latest_torques;
                     memcpy(&queue_element.buffer, &update, sizeof(update));
                     xQueueSendToBack(queue_handle, &queue_element, portMAX_DELAY);
                 }
