@@ -480,19 +480,19 @@ void read_adc_task(void *void_handles)
             {
                 if (completed_transmission == &transmissions.fl)
                 {
-                    update.temp_fl = adc_to_temp(adc_result, PREVCU_FL_PULLUP);
+                    update.temp_fl = adc_to_temp(adc_result, PREVCU_FL_PULLDOWN);
                 }
                 else if (completed_transmission == &transmissions.fr)
                 {
-                    update.temp_fr = adc_to_temp(adc_result, PREVCU_FR_PULLUP);
+                    update.temp_fr = adc_to_temp(adc_result, PREVCU_FR_PULLDOWN);
                 }
                 else if (completed_transmission == &transmissions.bl)
                 {
-                    update.temp_bl = adc_to_temp(adc_result, PREVCU_BL_PULLUP);
+                    update.temp_bl = adc_to_temp(adc_result, PREVCU_BL_PULLDOWN);
                 }
                 else if (completed_transmission == &transmissions.br)
                 {
-                    update.temp_br = adc_to_temp(adc_result, PREVCU_BR_PULLUP);
+                    update.temp_br = adc_to_temp(adc_result, PREVCU_BR_PULLDOWN);
                 }
                 else
                 {
