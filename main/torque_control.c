@@ -20,7 +20,7 @@ static const char *TAG = "example";
 typedef struct queue_element_t
 {
     uint16_t queue_header;
-    char[32] buffer;
+    char[20] buffer;
 } queue_element_t;
 
 uint16_t id_array = {PREVCU_FL_ADDR, PREVCU_FR_ADDR, PREVCU_BL_ADDR, PREVCU_BR_ADDR};
