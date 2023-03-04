@@ -327,12 +327,12 @@ void read_rot_task(void *handle_void)
     }
 }
 
-typedef struct steering_data_t
+typedef struct steering_update_t
 {
     TickType_t time;
     float left_wheel_radian;
     float right_wheel_radian;
-} steering_data_t;
+} steering_update_t;
 
 void read_sas_task(void *handle_void)
 {
