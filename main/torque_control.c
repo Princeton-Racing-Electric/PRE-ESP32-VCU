@@ -41,6 +41,7 @@ typedef struct our_handles_t
     TaskHandle_t read_gyro_th;
     TaskHandle_t read_mc_temps_th;
     TaskHandle_t read_sas_th;
+    uint32_t calculated_torque; // 32 bits have no tearing.
 } our_handles_t;
 
 static void IRAM_ATTR wake_task_isr(void *args)
@@ -392,7 +393,8 @@ float adc_to_temp(uint16_t adc_val, float pullup)
 typedef struct adc_update_t
 {
     TickType_t time;
-    float throttle_percent, temp_fl, temp_fr, temp_bl, temp_br;
+    uint16_t throttle_percent;
+    uint8_t temp[4];
     bool includes_temp;
 } adc_update_t;
 
@@ -586,8 +588,7 @@ void send_torque_task(void *handle_void)
     uint8_t torques[4];
     for (;;)
     {
-        uint8_t torque;
-        xTaskNotifyAndQueryIndexed(handles->send_torque_th, 2, 0, eNoAction, &calculated_torque_long);
+        calculated_torque_long = handles->calculated_torque;
         if (!xTaskNotifyWaitIndexed(1, 0, 0, &direct_torque_long, 0))
         {
             // we didn't recieve a torque update, despite that updating twice as often. Abort immediately
@@ -677,7 +678,7 @@ void can_receive_task(void *handle_void)
             current_time - last_heartbeat_message[3]);
         if (max_time_diff >= pdMS_TO_TICKS(500))
         {
-            ticks_till_timeout = 0
+            ticks_till_timeout = 0;
         }
         else
         {
@@ -731,7 +732,7 @@ void can_receive_task(void *handle_void)
                 latest_speeds[index] |= message.data[5];
                 latest_speeds[index] <<= 8;
                 latest_speeds[index] |= message.data[6];
-                latest_speeds[index] <<= 8;
+                latest_speeds[index] <<= +8;
                 latest_speeds[index] |= message.data[7];
                 waiting_speeds |= 1 << index;
                 if (waiting_speeds == 0xF)
@@ -782,6 +783,127 @@ void can_receive_task(void *handle_void)
                 // we got a message we didnt expect
             }
         }
+    }
+}
+
+void proccessing_task(void *handle_void)
+{
+    wait_to_start();
+    our_handles_t *handles = (our_handles_t *)handle_void;
+    float throttle = 0;
+    float speed_estimates[4] = {0, 0, 0, 0};
+    float speed_l_offset = 0;
+    float wheel_speeds[4] = {0, 0, 0, 0};
+    float motor_temp_ramp = 1;
+    float controller_temp_ramp = 1;
+    uint8_t motor_temps[4];
+    uint8_t controller_temps[4];
+    float accumulated_error[4];
+    TickType_t last_accel_tick;
+    for (;;)
+    {
+        queue_element_t generic_element;
+        ESP_ERROR_CHECK(xQueueReceive(handles->queue_handle, &generic_element, portMAX_DELAY));
+        switch (generic_element.header)
+        {
+        case ADC_UPDATE_HEADER:
+            adc_update_t *update = (adc_update_t *)generic_element.buffer;
+            throttle = update.throttle_percent;
+            if (update.includes_temp)
+            {
+                motor_temps = update->temp;
+                uint8_t max_temp = max(max(max(update->temp[0], update->temp[1]), update->temp[2]), update->temp[3]);
+                if (max_temp < 100)
+                {
+                    motor_temp_ramp = 1.f;
+                }
+                else if (max_temp > 150)
+                {
+                    motor_temp_ramp = 0.f;
+                }
+                else
+                {
+                    motor_temp_ramp = 1.f - ((max_temp - 100.f) / 50.f);
+                }
+            }
+            break;
+        case STEERING_QUEUE_HEADER:
+            steering_update_t *update = (steering_update_t *)generic_element.buffer;
+            break;
+        case ROT_QUEUE_HEADER:
+            rot_update_t *update = (rot_update_t *)generic_element.buffer;
+            speed_l_offset = -update.z * half_wheelbase;
+            break;
+        case ACCEL_QUEUE_HEADER:
+            accel_update_t *update = (accel_update_t *)generic_element.buffer;
+            if (throttle != 0 && last_accel_tick)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    speed_estimates[i] += update->x[i] * (update->time - last_accel_tick) * pdTICKS_TO_MS / 1000;
+                }
+            }
+            last_accel_tick = update.time;
+            break;
+        case SPEED_UPDATE_HEADER:
+            speed_update_t *update = (speed_update_t *)generic_element.buffer;
+            if (throttle == 0)
+            {
+                for (int i = 0; i < 4; i++)
+                {
+                    speed_estimates[i] = update->speeds[i] * 0.1f;
+                }
+            }
+            for (int i = 0; i < 4; i++)
+            {
+                wheel_speeds[i] = update->speeds[i] * 0.1f;
+            }
+            break;
+        case MC_TEMP_UPDATE_HEADER:
+            mc_temp_update_t *update = (mc_temp_update_t *)generic_element.buffer;
+            controller_temps = update->temperatures;
+            uint8_t max_temp = max(max(max(update->temp[0], update->temp[1]), update->temp[2]), update->temp[3]);
+            if (max_temp < 75)
+            {
+                controller_temp_ramp = 1.f;
+            }
+            else if (max_temp > 100)
+            {
+                controller_temp_ramp = 0.f;
+            }
+            else
+            {
+                controller_temp_ramp = 1.f - ((max_temp - 75.f) / 25.f);
+            }
+            break;
+        case MC_TORQUE_UPDATE_HEADER:
+            mc_torque_update_t *update = (mc_torque_update_t *)generic_element.buffer;
+            break;
+        default:
+            break;
+        }
+        bool offset_l = true;
+        uint8_t requested_torque[4];
+        uint8_t max_requested_torque = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            float offset = offset_l ? speed_l_offset : -speed_l_offset;
+            float error = 0.19 * throttle - (wheel_speed[i] - speed_estimate[i] - offset) / speed_estimate[i];
+            requested_torque[i] = error * 500 + accumulated_error[i] * 10;
+            max_requested_torque = max(max_requested_torque, requested_torque[i]);
+            accumulated_error[i] += error;
+            offset_l = !offset_l;
+        }
+        float ramp = min(controller_temp_ramp, motor_temp_ramp);
+        if (ramp < 1 && max_requested_torque > ramp * 255)
+        {
+            float eff_remp = ramp * 255 / max_requested_torque;
+            for (int i = 0; i < 4; ++i)
+            {
+                requested_torque[i] = floor(eff_ramp * requested_torque[i]);
+            }
+        }
+        handles.calculated_torque = *(uint32_t *)requested_torque;
     }
 }
 
