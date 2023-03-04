@@ -58,8 +58,8 @@ typedef struct our_handles_t
     TaskHandle_t read_gyro_th;
     TaskHandle_t read_mc_temps_th;
     TaskHandle_t read_sas_th;
-    uint32_t calculated_torques; // 32 bits have no tearing
-    uint32_t lifted_throttle;    // 32 bits have no tearing.
+    volatile uint32_t calculated_torques; // 32 bits have no tearing
+    volatile uint32_t lifted_throttle;    // 32 bits have no tearing.
 } our_handles_t;
 
 static void IRAM_ATTR wake_task_isr(void *args)
@@ -944,14 +944,14 @@ void setup()
     gpio_set_pull_mode(CONFIG_PREVCU_GYRO_INT_GPIO, GPIO_FLOATING);
     gpio_set_intr_type(CONFIG_PREVCU_GYRO_INT_GPIO, GPIO_INTR_POSEDGE);
 
-    xTaskCreate(twai_receive_task, "Can Receive", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_RECEIVE_CAN_PRIORITY, &handles->twai_receive_th);
-    xTaskCreate(send_torques_task, "Send Torque", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_SEND_TORQUES_PRIORITY, &handles->send_torques_th);
-    xTaskCreate(read_adc_task, "Adc Update", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_THROTTLE_PRIORITY, &handles->read_adc_th);
-    xTaskCreate(read_accel_task, "Read Accel", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_ACCEL_PRIORITY, &handles->read_accel_th);
-    xTaskCreate(read_speeds_task, "Read Speeds", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_SPEEDS_PRIORITY, &handles->read_speeds_th);
-    xTaskCreate(read_gyro_task, "Read Gyro", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_GYRO_PRIORITY, &handles->read_gyro_th);
-    xTaskCreate(read_mc_temps_task, "Read MC Temps", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_CONTROLLER_TEMPS_PRIORITY, &handles->read_mc_temps_th);
-    xTaskCreate(read_sas_task, "Read SAS", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_SAS_PRIORITY, &handles->read_sas_th);
+    xTaskCreate(twai_receive_task, "Can Receive", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_RECEIVE_CAN_PRIORITY, &handles->twai_receive_th);
+    xTaskCreate(send_torques_task, "Send Torque", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_SEND_TORQUES_PRIORITY, &handles->send_torques_th);
+    xTaskCreate(read_adc_task, "Adc Update", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_THROTTLE_PRIORITY, &handles->read_adc_th);
+    xTaskCreate(read_accel_task, "Read Accel", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_ACCEL_PRIORITY, &handles->read_accel_th);
+    xTaskCreate(read_speeds_task, "Read Speeds", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_SPEEDS_PRIORITY, &handles->read_speeds_th);
+    xTaskCreate(read_gyro_task, "Read Gyro", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_GYRO_PRIORITY, &handles->read_gyro_th);
+    xTaskCreate(read_mc_temps_task, "Read MC Temps", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_CONTROLLER_TEMPS_PRIORITY, &handles->read_mc_temps_th);
+    xTaskCreate(read_sas_task, "Read SAS", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_SAS_PRIORITY, &handles->read_sas_th);
 
     gpio_install_isr_service(0);
     gpio_isr_handler_add(CONFIG_PREVCU_ACCEL_INT_GPIO, wake_task_isr, (void *)handles->read_accel_th);
