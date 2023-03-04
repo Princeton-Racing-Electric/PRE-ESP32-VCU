@@ -41,7 +41,8 @@ typedef struct our_handles_t
     TaskHandle_t read_gyro_th;
     TaskHandle_t read_mc_temps_th;
     TaskHandle_t read_sas_th;
-    uint32_t calculated_torque; // 32 bits have no tearing.
+    uint32_t calculated_torque; // 32 bits have no tearing
+    uint32_t lifted_throttle;   // 32 bits have no tearing.
 } our_handles_t;
 
 static void IRAM_ATTR wake_task_isr(void *args)
@@ -394,7 +395,7 @@ typedef struct adc_update_t
 {
     TickType_t time;
     uint16_t throttle_percent;
-    uint8_t temp[4];
+    uint8_t temps[4];
     bool includes_temp;
 } adc_update_t;
 
@@ -471,30 +472,34 @@ void read_adc_task(void *void_handles)
                 if (throttle_percent < 0)
                 {
                     throttle_percent = 0;
+                    handles->lifted_throttle = 1;
+                }
+                else
+                {
+                    handles->lifted_throttle = 0;
                 }
                 if (throttle_percent > 1)
                 {
                     throttle_percent = 1
                 }
-                xTaskNotifyIndexed(handles->send_torque_th, 1, floor(throttle_percent * 255), eSetValueWithOverwrite);
             }
             else if (read_temps)
             {
                 if (completed_transmission == &transmissions.fl)
                 {
-                    update.temp_fl = adc_to_temp(adc_result, PREVCU_FL_PULLDOWN);
+                    update.temps[0] = adc_to_temp(adc_result, PREVCU_FL_PULLDOWN);
                 }
                 else if (completed_transmission == &transmissions.fr)
                 {
-                    update.temp_fr = adc_to_temp(adc_result, PREVCU_FR_PULLDOWN);
+                    update.temps[1] = adc_to_temp(adc_result, PREVCU_FR_PULLDOWN);
                 }
                 else if (completed_transmission == &transmissions.bl)
                 {
-                    update.temp_bl = adc_to_temp(adc_result, PREVCU_BL_PULLDOWN);
+                    update.temps[2] = adc_to_temp(adc_result, PREVCU_BL_PULLDOWN);
                 }
                 else if (completed_transmission == &transmissions.br)
                 {
-                    update.temp_br = adc_to_temp(adc_result, PREVCU_BR_PULLDOWN);
+                    update.temps[3] = adc_to_temp(adc_result, PREVCU_BR_PULLDOWN);
                 }
                 else
                 {
@@ -583,17 +588,17 @@ void send_torque_task(void *handle_void)
     wait_to_start();
     our_handles_t *handles = (our_handles_t *)handle_void;
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    uint32_t direct_torque_long;
     uint32_t calculated_torque_long;
     uint8_t torques[4];
     for (;;)
     {
         calculated_torque_long = handles->calculated_torque;
-        if (!xTaskNotifyWaitIndexed(1, 0, 0, &direct_torque_long, 0))
+        if (handles->lifted_throttle == 2)
         {
-            // we didn't recieve a torque update, despite that updating twice as often. Abort immediately
+            // we didn't recieve an update. Abort immediately
         }
-        if (direct_torque_long == 0)
+        handles->lifted_throttle = 2;
+        if (handles->lifted_throttle)
         {
             // The driver has lifted their foot off the pedal. No matter what, we need to stop
             torques = {0, 0, 0, 0};
@@ -811,8 +816,8 @@ void proccessing_task(void *handle_void)
             throttle = update.throttle_percent;
             if (update.includes_temp)
             {
-                motor_temps = update->temp;
-                uint8_t max_temp = max(max(max(update->temp[0], update->temp[1]), update->temp[2]), update->temp[3]);
+                motor_temps = update->temps;
+                uint8_t max_temp = max(max(max(update->temps[0], update->temps[1]), update->temps[2]), update->temps[3]);
                 if (max_temp < 100)
                 {
                     motor_temp_ramp = 1.f;
