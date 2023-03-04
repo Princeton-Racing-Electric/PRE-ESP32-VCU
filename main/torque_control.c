@@ -385,7 +385,7 @@ float adc_to_temp(uint16_t adc_val, float pulldown)
     float A = 0.0039083f;
     float B = -0.0000005775f;
     ret = 1.f * adc_val / 2048.f;
-    ret = 1.f - (0.001f * pulldown * (1.f - ret)) / (1.f * ret);
+    ret = 1.f - (0.001f * pulldown * (1.f - ret)) / ret;
     ret = A * A - 4 * B * ret;
     ret = (-A - sqrtf(ret)) / 2.f / B;
 }
