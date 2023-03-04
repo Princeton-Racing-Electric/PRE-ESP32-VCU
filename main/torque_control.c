@@ -378,14 +378,14 @@ void read_sas_task(void *handle_void)
 }
 
 // TODO: Switch to pulldown
-float adc_to_temp(uint16_t adc_val, float pullup)
+float adc_to_temp(uint16_t adc_val, float pulldown)
 {
     float ret;
     float A = 0.0039083f;
     float B = -0.0000005775f;
     ret = 1.f * adc_val / 2048.f;
-    ret = (1.f - 0.001f * pullup * ret) / (1.f - ret);
-    ret = A * A - 4 * B * ret * ret;
+    ret = 1.f - (0.001f * pulldown * (1.f - ret)) / (1.f * ret);
+    ret = A * A - 4 * B * ret;
     ret = (-A - sqrtf(ret)) / 2.f / B;
 }
 
