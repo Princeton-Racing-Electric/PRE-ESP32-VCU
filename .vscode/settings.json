@@ -7,6 +7,9 @@
     "string_view": "c",
     "array": "c",
     "string": "c",
-    "system_error": "c"
-  }
+    "system_error": "c",
+    "can.h": "c",
+    "random": "c"
+  },
+  "idf.adapterTargetName": "esp32"
 }

@@ -1,4 +1,21 @@
 menu "VCU Configuration"
+    menu "CAN"
+        config PREVCU_CAN_TIMEOUT
+            int "Timeout (ms)"
+            range 0 10000
+            default 100
+    endmenu
+
+    menu "Car Parameters"
+        config PREVCU_HALF_WHEELBASE_MM
+            int "Half Wheelbase (mm)"
+            range 0 10000
+            default 500
+        config PREVCU_WHEEL_RADIUS_MM
+            int "Wheel Radius (mm)"
+            range 0 10000
+            default 406
+    endmenu
     menu "GPIO"
         config PREVCU_GPIO_MOSI
             int "GPIO MOSI"
@@ -64,6 +81,15 @@ menu "VCU Configuration"
             int "CAN Rx GPIO"
             range 0 48
             default 22
+
+        config PREVCU_GPIO_SAS_TX
+            int "SAS UART Tx GPIO"
+            range 0 48
+            default 26
+        config PREVCU_GPIO_SAS_RX
+            int "SAS UART Rx GPIO"
+            range 0 48
+            default 27
     endmenu
 
     menu "Gyroscope"
@@ -141,7 +167,7 @@ menu "VCU Configuration"
         config PREVCU_MAX_THROTTLE_PERCENT
             int "100% Throttle in % of 5V"
             range 0 5000
-            default 32s
+            default 32
         config PREVCU_MIN_THROTTLE_PERCENT
             int "0% Throttle in % of 5V"
             range 0 100
@@ -171,19 +197,19 @@ menu "VCU Configuration"
         config PREVCU_FL_ADDR
             int "Front Left Node-ID"
             range 1 255
-            default 0x01
+            default 1
         config PREVCU_FR_ADDR
             int "Front Right Node-ID"
             range 1 255
-            default 0x02
+            default 2
         config PREVCU_BL_ADDR
             int "Back Left Node-ID"
             range 1 255
-            default 0x03
-        config PREVCU_BL_ADDR
+            default 3
+        config PREVCU_BR_ADDR
             int "Back Right Node-ID"
             range 1 255
-            default 0x04
+            default 4
     endmenu
 
     menu "Motor Temperatures"
@@ -228,7 +254,7 @@ menu "VCU Configuration"
             default 10
             help
                 Should be the highest
-        config PREVCU_SEND_TORQUE_PRIORITY
+        config PREVCU_SEND_TORQUES_PRIORITY
             int "Send Torque Priority"
             range 1 32
             default 9
@@ -248,7 +274,7 @@ menu "VCU Configuration"
             range 1 32
             default 6
 
-        config PREVCU_READ_MOTOR_TORQUE_PRIORITY
+        config PREVCU_READ_MOTOR_TORQUES_PRIORITY
             int "Read Motor Torque Priority"
             range 1 32
             default 5
@@ -258,12 +284,12 @@ menu "VCU Configuration"
             range 1 32
             default 4
 
-        config PREVCU_READ_MOTOR_TEMP_PRIORITY
+        config PREVCU_READ_MOTOR_TEMPS_PRIORITY
             int "Read Motor Temperature Priority"
             range 1 32
             default 3
 
-        config PREVCU_READ_CONTROLLER_TEMP_PRIORITY
+        config PREVCU_READ_CONTROLLER_TEMPS_PRIORITY
             int "Read Motor Controller Temperature Priority"
             range 1 32
             default 2
@@ -275,7 +301,7 @@ menu "VCU Configuration"
     endmenu
 
     menu "Task Periods"
-        config PREVCU_SEND_TORQUE_PERIOD
+        config PREVCU_SEND_TORQUES_PERIOD
             int "Send Torque Period"
             range 1 10000
             default 20
@@ -296,21 +322,21 @@ menu "VCU Configuration"
             help
                 rate in milliseconds
 
-        config PREVCU_READ_MOTOR_TORQUE_PERIOD
+        config PREVCU_READ_MOTOR_TORQUES_PERIOD
             int "Read Motor Torque Period"
             range 1 10000
             default 20
             help
                 rate in milliseconds
 
-        config PREVCU_READ_MOTOR_TEMP_PERIOD
+        config PREVCU_READ_MOTOR_TEMPS_PERIOD
             int "Read Motor Temperature Period"
             range 1 10000
             default 1000
             help
                 rate in milliseconds
 
-        config PREVCU_READ_CONTROLLER_TEMP_PERIOD
+        config PREVCU_READ_CONTROLLER_TEMPS_PERIOD
             int "Read Motor Controller Temperature Period (rounded up to throttle multiple)"
             range 1 10000
             default 1000
