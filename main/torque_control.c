@@ -17,9 +17,11 @@
 #include "sdkconfig.h"
 #include "driver/spi_master.h"
 #include "driver/uart.h"
-#include "driver/can.h"
+#include "driver/twai.h"
 
 static const char *TAG = "example";
+
+float pi = 3.14159f;
 
 typedef struct queue_element_t
 {
@@ -47,7 +49,7 @@ typedef struct our_handles_t
     spi_device_handle_t accelerometer;
     spi_device_handle_t gyroscope;
     QueueHandle_t queue_handle;
-    TaskHandle_t can_receive_th;
+    TaskHandle_t twai_receive_th;
     TaskHandle_t send_torques_th;
     TaskHandle_t read_adc_th;
     TaskHandle_t read_accel_th;
@@ -91,6 +93,7 @@ float accel_reading_conversion(char *data)
     ucounts <<= 8;
     ucounts |= data[0];
     int16_t counts = ucounts;
+    return counts / 32768.f * 1000.f * 1.5f * (1 << CONFIG_PREVCU_ACCEL_FULL_SCALE);
 }
 
 typedef struct accel_update_t
@@ -137,6 +140,7 @@ float gyro_reading_conversion(char *data)
     ucounts <<= 8;
     ucounts |= data[0];
     int16_t counts = ucounts;
+    return counts / 32767.f * pi / 180.f * 2000.f / (1 << CONFIG_PREVCU_GYRO_FULL_SCALE);
 }
 
 typedef struct rot_update_t
@@ -212,7 +216,7 @@ void read_sas_task(void *handle_void)
             counts += 4096;
         }
         counts -= 2048;
-        float rack_angle = counts / 2.f / 3.14159f;
+        float rack_angle = counts / 2.f / pi;
         steering_update_t steering_data = {
             .left_wheel_radian = rack_angle,
             .right_wheel_radian = rack_angle,
@@ -223,7 +227,7 @@ void read_sas_task(void *handle_void)
 
         memcpy(queue_element.buffer, &steering_data, sizeof(steering_data));
         xQueueSendToBack(handles->queue_handle, &queue_element, portMAX_DELAY);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_READ_CONTROLLER_TEMP_PERIOD));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_READ_CONTROLLER_TEMPS_PERIOD));
     }
 }
 
@@ -273,7 +277,7 @@ void read_adc_task(void *handle_void)
     transmissions.br.addr = CONFIG_PREVCU_BR_ADC_NUM;
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    uint16_t divisor = (CONFIG_PREVCU_READ_CONTROLLER_TEMP_PERIOD + CONFIG_PREVCU_READ_THROTTLE_PERIOD - 1) / CONFIG_PREVCU_READ_THROTTLE_PERIOD;
+    uint16_t divisor = (CONFIG_PREVCU_READ_CONTROLLER_TEMPS_PERIOD + CONFIG_PREVCU_READ_THROTTLE_PERIOD - 1) / CONFIG_PREVCU_READ_THROTTLE_PERIOD;
     uint16_t current_count = 0;
     for (;;)
     {
@@ -376,7 +380,7 @@ void read_data(unsigned int address, unsigned int sub_index)
     uint8_t b2 = (address >> 0);
     for (int i = 0; i < 4; i++)
     {
-        can_message_t message = {
+        twai_message_t message = {
             .identifier = 0x600 + id_array[i],
             .data_length_code = 8,
             .data = {
@@ -394,7 +398,7 @@ void read_data(unsigned int address, unsigned int sub_index)
         };
 
         // Queue message for transmission
-        if (can_transmit(&message, pdMS_TO_TICKS(CONFIG_PREVCU_CAN_TIMEOUT)) != ESP_OK)
+        if (twai_transmit(&message, pdMS_TO_TICKS(CONFIG_PREVCU_CAN_TIMEOUT)) != ESP_OK)
         {
             // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
         }
@@ -419,7 +423,7 @@ void read_mc_temps_task(void *handle_void)
     for (;;)
     {
         read_data(0x2026, 0x00);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_READ_CONTROLLER_TEMP_PERIOD));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_READ_CONTROLLER_TEMPS_PERIOD));
     }
 }
 
@@ -430,7 +434,7 @@ void read_real_torque_task(void *handle_void)
     for (;;)
     {
         read_data(0x6077, 0x00);
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_READ_MOTOR_TORQUE_PERIOD));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_READ_MOTOR_TORQUES_PERIOD));
     }
 }
 
@@ -463,7 +467,7 @@ void send_torques_task(void *handle_void)
 
         for (int i = 0; i < 4; ++i)
         {
-            can_message_t message = {
+            twai_message_t message = {
                 .identifier = 0x600 + id_array[i],
                 .data_length_code = 8,
                 .data = {
@@ -479,12 +483,12 @@ void send_torques_task(void *handle_void)
             };
 
             // Queue message for transmission
-            if (can_transmit(&message, pdMS_TO_TICKS(CONFIG_PREVCU_CAN_TIMEOUT)) != ESP_OK)
+            if (twai_transmit(&message, pdMS_TO_TICKS(CONFIG_PREVCU_CAN_TIMEOUT)) != ESP_OK)
             {
                 // TODO we weren't able to send our message in a reasonable amount of time. We should probably tell someone and reboot
             }
         }
-        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_SEND_TORQUE_PERIOD));
+        vTaskDelayUntil(&xLastWakeTime, pdMS_TO_TICKS(CONFIG_PREVCU_SEND_TORQUES_PERIOD));
     }
 }
 typedef struct speed_update_t
@@ -506,7 +510,7 @@ typedef struct mc_torque_update_t
 } mc_torque_update_t;
 
 // takes care of all of the receiving
-void can_receive_task(void *handle_void)
+void twai_receive_task(void *handle_void)
 {
     wait_for_start();
     our_handles_t *handles = (our_handles_t *)handle_void;
@@ -546,9 +550,9 @@ void can_receive_task(void *handle_void)
         {
             ticks_till_timeout = pdMS_TO_TICKS(500) - max_time_diff;
         }
-        can_message_t message;
+        twai_message_t message;
 
-        if (can_receive(&message, ticks_till_timeout) != ESP_OK)
+        if (twai_receive(&message, ticks_till_timeout) != ESP_OK)
         {
             // report heartbeat timeout error and shutdown
         }
@@ -571,6 +575,7 @@ void can_receive_task(void *handle_void)
             index = 3;
             break;
         default:
+            abort();
             // we got a message we didn't expect.
             break;
         }
@@ -681,7 +686,7 @@ void proccessing_task(void *handle_void)
     uint8_t motor_temps[4];
     uint8_t controller_temps[4];
     float accumulated_errors[4];
-    TickType_t last_accel_tick;
+    TickType_t last_accel_tick = 0;
     for (;;)
     {
         queue_element_t generic_element;
@@ -729,7 +734,7 @@ void proccessing_task(void *handle_void)
             {
                 for (int i = 0; i < 4; i++)
                 {
-                    speed_estimates[i] += update->x * (update->time - last_accel_tick) * portTICK_RATE_MS / 1000;
+                    speed_estimates[i] += update->x * (update->time - last_accel_tick) * portTICK_PERIOD_MS / 1000;
                 }
             }
             last_accel_tick = update->time;
@@ -809,7 +814,6 @@ void proccessing_task(void *handle_void)
 
 void setup()
 {
-    esp_err_t err;
     spi_bus_config_t buscfg = {
         .mosi_io_num = CONFIG_PREVCU_GPIO_MOSI,
         .miso_io_num = CONFIG_PREVCU_GPIO_MISO,
@@ -922,26 +926,25 @@ void setup()
     write_imu(handles->gyroscope, 0xF, CONFIG_PREVCU_GYRO_FULL_SCALE);
     write_imu(handles->gyroscope, 0x10, CONFIG_PREVCU_GYRO_ODR);
 
-    can_general_config_t g_config = CAN_GENERAL_CONFIG_DEFAULT(CONFIG_PREVCU_CANTX_GPIO, CONFIG_PREVCU_CANRX_GPIO, CAN_MODE_NORMAL);
-    can_timing_config_t t_config = CAN_TIMING_CONFIG_500KBITS();
-    can_filter_config_t f_config = CAN_FILTER_CONFIG_ACCEPT_ALL();
+    twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CONFIG_PREVCU_CANTX_GPIO, CONFIG_PREVCU_CANRX_GPIO, TWAI_MODE_NORMAL);
+    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+    twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
     // Install CAN driver
-    ESP_ERROR_CHECK(can_driver_install(&g_config, &t_config, &f_config));
-    ESP_ERROR_CHECK(can_start());
+    ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
+    ESP_ERROR_CHECK(twai_start());
 
     handles->queue_handle = xQueueCreate(10, sizeof(queue_element_t));
 
-    gpio_pad_select_gpio(CONFIG_PREVCU_ACCEL_INT_GPIO);
-    gpio_pad_select_gpio(CONFIG_PREVCU_GYRO_INT_GPIO);
     gpio_set_direction(CONFIG_PREVCU_ACCEL_INT_GPIO, GPIO_MODE_INPUT);
-    gpio_set_direction(CONFIG_PREVCU_GYRO_INT_GPIO, GPIO_MODE_INPUT);
     gpio_set_pull_mode(CONFIG_PREVCU_ACCEL_INT_GPIO, GPIO_FLOATING);
-    gpio_set_pull_mode(CONFIG_PREVCU_GYRO_INT_GPIO, GPIO_FLOATING);
     gpio_set_intr_type(CONFIG_PREVCU_ACCEL_INT_GPIO, GPIO_INTR_POSEDGE);
+
+    gpio_set_direction(CONFIG_PREVCU_GYRO_INT_GPIO, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(CONFIG_PREVCU_GYRO_INT_GPIO, GPIO_FLOATING);
     gpio_set_intr_type(CONFIG_PREVCU_GYRO_INT_GPIO, GPIO_INTR_POSEDGE);
 
-    xTaskCreate(can_receive_task, "Can Receive", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_RECEIVE_CAN_PRIORITY, &handles->can_receive_th);
+    xTaskCreate(twai_receive_task, "Can Receive", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_RECEIVE_CAN_PRIORITY, &handles->twai_receive_th);
     xTaskCreate(send_torques_task, "Send Torque", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_SEND_TORQUES_PRIORITY, &handles->send_torques_th);
     xTaskCreate(read_adc_task, "Adc Update", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_THROTTLE_PRIORITY, &handles->read_adc_th);
     xTaskCreate(read_accel_task, "Read Accel", configMINIMAL_STACK_SIZE + 100, (void *)handles, CONFIG_PREVCU_READ_ACCEL_PRIORITY, &handles->read_accel_th);
@@ -957,11 +960,11 @@ void setup()
     // MAYBE WAIT FOR SOME SIGNAL
 
     // release all the tasks whose periodicity isn't controlled by us
-    xTaskNotifyIndexed(handles->can_receive_th, 0, 0, eNoAction);
+    xTaskNotifyIndexed(handles->twai_receive_th, 0, 0, eNoAction);
     xTaskNotifyIndexed(handles->read_accel_th, 0, 0, eNoAction);
     xTaskNotifyIndexed(handles->read_gyro_th, 0, 0, eNoAction);
     // offset the periodic ones by 7ms
-    xTaskNotifyIndexed(handles->adc_update_th, 0, 0, eNoAction);
+    xTaskNotifyIndexed(handles->read_adc_th, 0, 0, eNoAction);
     vTaskDelay(pdMS_TO_TICKS(2 * CONFIG_PREVCU_READ_THROTTLE_PERIOD + 7));
     xTaskNotifyIndexed(handles->send_torques_th, 0, 0, eNoAction);
     vTaskDelay(pdMS_TO_TICKS(7));

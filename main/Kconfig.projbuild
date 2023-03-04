@@ -251,41 +251,36 @@ menu "VCU Configuration"
         config PREVCU_RECEIVE_CAN_PRIORITY
             int "Receive Can Interupt Priority"
             range 1 32
-            default 10
+            default 9
             help
                 Should be the highest
         config PREVCU_SEND_TORQUES_PRIORITY
             int "Send Torque Priority"
             range 1 32
-            default 9
+            default 8
 
         config PREVCU_READ_THROTTLE_PRIORITY
             int "Read Throttle Priority"
             range 1 32
-            default 8
+            default 7
 
         config PREVCU_READ_ACCEL_PRIORITY
             int "Read Accelerometer Priority"
             range 1 32
-            default 7
+            default 6
 
         config PREVCU_READ_SPEEDS_PRIORITY
             int "Read Motor Speeds Priority"
             range 1 32
-            default 6
+            default 5
 
         config PREVCU_READ_MOTOR_TORQUES_PRIORITY
             int "Read Motor Torque Priority"
             range 1 32
-            default 5
+            default 4
 
         config PREVCU_READ_GYRO_PRIORITY
             int "Read Gyroscope Priority"
-            range 1 32
-            default 4
-
-        config PREVCU_READ_MOTOR_TEMPS_PRIORITY
-            int "Read Motor Temperature Priority"
             range 1 32
             default 3
 

@@ -9,7 +9,10 @@
     "string": "c",
     "system_error": "c",
     "can.h": "c",
-    "random": "c"
+    "random": "c",
+    "vector": "c",
+    "xstring": "c",
+    "xutility": "c"
   },
   "idf.adapterTargetName": "esp32"
 }
