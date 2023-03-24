@@ -29,6 +29,11 @@ typedef struct queue_element_t
     char buffer[32];
 } queue_element_t;
 
+enum errors
+{
+    CRITICAL_ERRORS_GREATER
+}
+
 enum headers
 {
     ADC_UPDATE_HEADER,
@@ -39,6 +44,30 @@ enum headers
     MC_TEMP_UPDATE_HEADER,
     MC_TORQUE_UPDATE_HEADER,
 };
+
+void write_err(uint32_t err)
+{
+    twai_message_t message = {
+        .identifier = 0x140,
+        .data_length_code = 4,
+        .data = {
+            (uint8_t)(err << 0),
+            (uint8_t)(err << 8),
+            (uint8_t)(err << 16),
+            (uint8_t)(err << 24),
+        },
+    };
+
+    // Queue message for transmission
+    if (twai_transmit(&message, 10) != ESP_OK)
+    {
+        esp_restart();
+    }
+    if (err > CRITICAL_ERRORS_GREATER)
+    {
+        esp_restart();
+    }
+}
 
 uint16_t id_array[4] = {CONFIG_PREVCU_FL_ADDR, CONFIG_PREVCU_FR_ADDR, CONFIG_PREVCU_BL_ADDR, CONFIG_PREVCU_BR_ADDR};
 
@@ -70,7 +99,7 @@ static void IRAM_ATTR wake_task_isr(void *args)
     portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
-void write_imu(spi_device_handle_t imu, uint8_t addr, uint8_t data)
+esp_err_t write_imu(spi_device_handle_t imu, uint8_t addr, uint8_t data)
 {
     spi_transaction_t t = {
         .length = 8,
@@ -79,7 +108,7 @@ void write_imu(spi_device_handle_t imu, uint8_t addr, uint8_t data)
         .flags = SPI_TRANS_USE_TXDATA,
         .tx_data = {data},
     };
-    ESP_ERROR_CHECK(spi_device_transmit(imu, &t));
+    return spi_device_transmit(imu, &t);
 }
 
 void wait_for_start()
@@ -824,7 +853,10 @@ void setup()
 
     spi_host_device_t spi_host = SPI2_HOST;
 
-    ESP_ERROR_CHECK(spi_bus_initialize(spi_host, &buscfg, SPI_DMA_DISABLED));
+    if (spi_bus_initialize(spi_host, &buscfg, SPI_DMA_DISABLED) != ESP_OK)
+    {
+        write_err(FAILED_SPI_SETUP);
+    }
 
     // this ADC is garbage, but it's what PCB team has given us.
     spi_device_interface_config_t adc_device_config = {
@@ -841,7 +873,11 @@ void setup()
         .queue_size = 8,
     };
     our_handles_t *handles = malloc(sizeof(our_handles_t));
-    ESP_ERROR_CHECK(spi_bus_add_device(spi_host, &adc_device_config, &handles->adc));
+    if (spi_bus_add_device(spi_host, &adc_device_config, &handles->adc) != ESP_OK)
+    {
+        write_err(FAILED_TO_SETUP_ADC);
+    }
+    /*
     uart_config_t uart_config = {
         .baud_rate = 2000000,
         .data_bits = UART_DATA_8_BITS,
@@ -855,6 +891,7 @@ void setup()
     ESP_ERROR_CHECK(uart_set_pin(handles->sas, CONFIG_PREVCU_GPIO_SAS_TX, CONFIG_PREVCU_GPIO_SAS_RX, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE));
     ESP_ERROR_CHECK(uart_set_mode(handles->sas, UART_MODE_RS485_HALF_DUPLEX));
     ESP_ERROR_CHECK(uart_set_rx_timeout(handles->sas, 10));
+    */
 
     spi_device_interface_config_t accelerometer_device_config = {
         .flags = SPI_DEVICE_HALFDUPLEX,
@@ -869,7 +906,10 @@ void setup()
         .cs_ena_posttrans = 3, // Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
         .queue_size = 3,
     };
-    ESP_ERROR_CHECK(spi_bus_add_device(spi_host, &accelerometer_device_config, &handles->accelerometer));
+    if (spi_bus_add_device(spi_host, &accelerometer_device_config, &handles->accelerometer) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_ACCEL);
+    }
 
     vTaskDelay(pdMS_TO_TICKS(1));
     // dummy accelerometer spi read to activate spi
@@ -879,21 +919,39 @@ void setup()
         .cmd = 0x1,
         .addr = 0x0,
     };
-    ESP_ERROR_CHECK(spi_device_transmit(handles->accelerometer, &t));
+    if ((spi_device_transmit(handles->accelerometer, &t)) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_ACCEL);
+    }
     vTaskDelay(pdMS_TO_TICKS(1));
-    write_imu(handles->accelerometer, 0x7D, 0x4);
+    if (write_imu(handles->accelerometer, 0x7D, 0x4) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_ACCEL);
+    }
     vTaskDelay(pdMS_TO_TICKS(50));
     write_imu(handles->accelerometer, 0x52 + CONFIG_PREVCU_ACCEL_INT, 0xC + 0x4 * CONFIG_PREVCU_ACCEL_INT_TYPE);
     if (CONFIG_PREVCU_ACCEL_INT == 1)
     {
-        write_imu(handles->accelerometer, 0x58, 0x4);
+        if (write_imu(handles->accelerometer, 0x58, 0x4) != ESP_OK)
+        {
+            write_err(FAILED_TO_WRITE_ACCEL);
+        }
     }
     else
     {
-        write_imu(handles->accelerometer, 0x58, 0x40);
+        if (write_imu(handles->accelerometer, 0x58, 0x40) != ESP_OK)
+        {
+            write_err(FAILED_TO_WRITE_ACCEL);
+        }
     }
-    write_imu(handles->accelerometer, 0x41, CONFIG_PREVCU_ACCEL_FULL_SCALE);
-    write_imu(handles->accelerometer, 0x40, CONFIG_PREVCU_ACCEL_OVERSAMPLING << 4 | CONFIG_PREVCU_ACCEL_ODR);
+    if (write_imu(handles->accelerometer, 0x41, CONFIG_PREVCU_ACCEL_FULL_SCALE) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_ACCEL);
+    }
+    if (write_imu(handles->accelerometer, 0x40, CONFIG_PREVCU_ACCEL_OVERSAMPLING << 4 | CONFIG_PREVCU_ACCEL_ODR) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_ACCEL);
+    }
 
     spi_device_interface_config_t gyroscope_device_config = {
         .flags = SPI_DEVICE_HALFDUPLEX,
@@ -908,31 +966,61 @@ void setup()
         .cs_ena_posttrans = 3, // Keep the CS low 3 cycles after transaction, to stop slave from missing the last bit when CS has less propagation delay than CLK
         .queue_size = 3,
     };
-    ESP_ERROR_CHECK(spi_bus_add_device(spi_host, &gyroscope_device_config, &handles->gyroscope));
+    if (spi_bus_add_device(spi_host, &gyroscope_device_config, &handles->gyroscope) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_GYRO);
+    }
 
     vTaskDelay(pdMS_TO_TICKS(1));
 
-    write_imu(handles->gyroscope, 0x15, 0x80);
+    if (write_imu(handles->gyroscope, 0x15, 0x80) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_GYRO);
+    }
     if (CONFIG_PREVCU_GYRO_INT == 3)
     {
-        write_imu(handles->gyroscope, 0x16, CONFIG_PREVCU_GYRO_INT_TYPE << 1);
-        write_imu(handles->gyroscope, 0x18, 0x01);
+        if (write_imu(handles->gyroscope, 0x16, CONFIG_PREVCU_GYRO_INT_TYPE << 1) != ESP_OK)
+        {
+            write_err(FAILED_TO_WRITE_GYRO);
+        }
+        if (write_imu(handles->gyroscope, 0x18, 0x01) != ESP_OK)
+        {
+            write_err(FAILED_TO_WRITE_GYRO);
+        }
     }
     else
     {
-        write_imu(handles->gyroscope, 0x16, CONFIG_PREVCU_GYRO_INT_TYPE << 3);
-        write_imu(handles->gyroscope, 0x18, 0x80);
+        if (write_imu(handles->gyroscope, 0x16, CONFIG_PREVCU_GYRO_INT_TYPE << 3) != ESP_OK)
+        {
+            write_err(FAILED_TO_WRITE_GYRO);
+        }
+        if (write_imu(handles->gyroscope, 0x18, 0x80) != ESP_OK)
+        {
+            write_err(FAILED_TO_WRITE_GYRO);
+        }
     }
-    write_imu(handles->gyroscope, 0xF, CONFIG_PREVCU_GYRO_FULL_SCALE);
-    write_imu(handles->gyroscope, 0x10, CONFIG_PREVCU_GYRO_ODR);
+    if (write_imu(handles->gyroscope, 0xF, CONFIG_PREVCU_GYRO_FULL_SCALE) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_GYRO);
+    }
+    if (write_imu(handles->gyroscope, 0x10, CONFIG_PREVCU_GYRO_ODR) != ESP_OK)
+    {
+        write_err(FAILED_TO_WRITE_GYRO);
+    }
 
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CONFIG_PREVCU_CANTX_GPIO, CONFIG_PREVCU_CANRX_GPIO, TWAI_MODE_NORMAL);
     twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
 
     // Install CAN driver
-    ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
-    ESP_ERROR_CHECK(twai_start());
+    if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK)
+    {
+        write_err(FAILED_TO_SETUP_CAN);
+    }
+    if (twai_start() != ESP_OK)
+    {
+        write_err(FAILED_TO_SETUP_CAN);
+    }
 
     handles->queue_handle = xQueueCreate(10, sizeof(queue_element_t));
 
@@ -951,7 +1039,7 @@ void setup()
     xTaskCreate(read_speeds_task, "Read Speeds", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_SPEEDS_PRIORITY, &handles->read_speeds_th);
     xTaskCreate(read_gyro_task, "Read Gyro", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_GYRO_PRIORITY, &handles->read_gyro_th);
     xTaskCreate(read_mc_temps_task, "Read MC Temps", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_CONTROLLER_TEMPS_PRIORITY, &handles->read_mc_temps_th);
-    xTaskCreate(read_sas_task, "Read SAS", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_SAS_PRIORITY, &handles->read_sas_th);
+    // xTaskCreate(read_sas_task, "Read SAS", configMINIMAL_STACK_SIZE + 500, (void *)handles, CONFIG_PREVCU_READ_SAS_PRIORITY, &handles->read_sas_th);
 
     gpio_install_isr_service(0);
     gpio_isr_handler_add(CONFIG_PREVCU_ACCEL_INT_GPIO, wake_task_isr, (void *)handles->read_accel_th);
