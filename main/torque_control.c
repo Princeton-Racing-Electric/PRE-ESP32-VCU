@@ -147,7 +147,9 @@ void read_accel_task(void *handle_void)
             .addr = 0x12,
             .rx_buffer = data,
         };
-        ESP_ERROR_CHECK(spi_device_transmit(handles->accelerometer, &t));
+        if (spi_device_transmit(handles->accelerometer, &t) != ESP_OK) {
+            write_err(FAILED_TO_READ_ACCEL);
+        }
         accel_update_t accel_data;
         accel_data.x = accel_reading_conversion(data + 1);
         accel_data.y = accel_reading_conversion(data + 3);
@@ -194,7 +196,9 @@ void read_gyro_task(void *handle_void)
             .addr = 0x02,
             .rx_buffer = data,
         };
-        ESP_ERROR_CHECK(spi_device_transmit(handles->gyroscope, &t));
+        if (spi_device_transmit(handles->gyroscope, &t) != ESP_OK) {
+            write_err(FAILED_TO_READ_GYRO);
+        }
         gyro_update_t gyro_data;
         gyro_data.x = accel_reading_conversion(data + 0);
         gyro_data.y = accel_reading_conversion(data + 2);
@@ -229,7 +233,9 @@ void read_sas_task(void *handle_void)
         {
             abort();
         }
-        ESP_ERROR_CHECK(uart_wait_tx_done(handles->sas, portMAX_DELAY));
+        if (uart_wait_tx_done(handles->sas, portMAX_DELAY) != ESP_OK) {
+            write_err(FAILED_TO_READ_SAS);
+        }
         char data[2];
         if (unlikely(uart_read_bytes(handles->sas, data, 2, portMAX_DELAY) != 2))
         {
@@ -324,18 +330,30 @@ void read_adc_task(void *handle_void)
             --current_count;
         }
         // queue them all at once so that we have to switch context less (hopefully)
-        ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &throttle_transmission, portMAX_DELAY));
+        if (spi_device_queue_trans(handles->adc, &throttle_transmission, portMAX_DELAY) != ESP_OK) {
+            write_err(FAILED_TO_QUEUE_THROTTLE);
+        }
         if (read_temps)
         {
-            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.fl, portMAX_DELAY));
-            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.fr, portMAX_DELAY));
-            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.bl, portMAX_DELAY));
-            ESP_ERROR_CHECK(spi_device_queue_trans(handles->adc, &transmissions.br, portMAX_DELAY));
+            if (spi_device_queue_trans(handles->adc, &transmissions.fl, portMAX_DELAY) != ESP_OK) {
+                write_err(FAILED_TO_QUEUE_TEMP);
+            }
+            if (spi_device_queue_trans(handles->adc, &transmissions.fr, portMAX_DELAY) != ESP_OK) {
+                write_err(FAILED_TO_QUEUE_TEMP);
+            }
+            if (spi_device_queue_trans(handles->adc, &transmissions.bl, portMAX_DELAY) != ESP_OK) {
+                write_err(FAILED_TO_QUEUE_TEMP);
+            }
+            if (spi_device_queue_trans(handles->adc, &transmissions.br, portMAX_DELAY) != ESP_OK) {
+                write_err(FAILED_TO_QUEUE_TEMP);
+            }
         }
         for (int i = 0; i < 1 + read_temps; ++i)
         {
             spi_transaction_t *completed_transmission; // will point one of the positions in the array above
-            ESP_ERROR_CHECK(spi_device_get_trans_result(handles->adc, &completed_transmission, portMAX_DELAY));
+            if (spi_device_get_trans_result(handles->adc, &completed_transmission, portMAX_DELAY) != ESP_OK) {
+                write_err(FAILED_TO_READ_ADC);
+            }
             uint16_t adc_result = completed_transmission->rx_data[0] & 0x3;
             adc_result <<= 8;
             adc_result |= completed_transmission->rx_data[1];
@@ -344,11 +362,11 @@ void read_adc_task(void *handle_void)
                 update.throttle_percent = adc_result / 2048.f * 100.f;
                 if (update.throttle_percent > CONFIG_PREVCU_ERR_MAX_THROTTLE_PERCENT)
                 {
-                    // error
+                    write_err(THROTTLE_UNPLUGGED_HIGH);
                 }
                 if (update.throttle_percent < CONFIG_PREVCU_ERR_MIN_THROTTLE_PERCENT)
                 {
-                    // error
+                    write_err(THROTTLE_UNPLUGGED_LOW);
                 }
                 update.throttle_percent = (update.throttle_percent - CONFIG_PREVCU_MIN_THROTTLE_PERCENT) / (CONFIG_PREVCU_MAX_THROTTLE_PERCENT - CONFIG_PREVCU_MIN_THROTTLE_PERCENT);
                 if (update.throttle_percent < 0)
@@ -385,12 +403,12 @@ void read_adc_task(void *handle_void)
                 }
                 else
                 {
-                    // Error
+                    write_err(NO_IDEA_WHERE_INFO_FROM);
                 }
             }
             else
             {
-                // error
+                write_err(NO_IDEA_WHERE_INFO_FROM);
             }
         }
         update.time = xTaskGetTickCount();
@@ -719,7 +737,9 @@ void proccessing_task(void *handle_void)
     for (;;)
     {
         queue_element_t generic_element;
-        ESP_ERROR_CHECK(xQueueReceive(handles->queue_handle, &generic_element, portMAX_DELAY));
+        if (xQueueReceive(handles->queue_handle, &generic_element, portMAX_DELAY) != ESP_OK) {
+            write_err(FAILED_TO_READ_QUEUE);
+        }
         switch (generic_element.header)
         {
         case ADC_UPDATE_HEADER:
